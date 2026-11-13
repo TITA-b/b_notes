@@ -13,6 +13,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import {
+  clearAiMessages,
+  getAiMessages,
+  saveAiMessage,
+} from "@/services/aiMessagesService";
 import type { AreaId, Note } from "@/types/note";
 import type { Task } from "@/types/task";
 
@@ -58,12 +63,55 @@ export function AiAssistantDrawer({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return [];
+        setHistoryLoading(true);
+        setPersistenceError(null);
+        return getAiMessages();
+      })
+      .then((history) => {
+        if (!cancelled) {
+          setMessages(
+            history.map((message) => ({
+              id: message.id,
+              role: message.role,
+              content: message.content,
+            }))
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setPersistenceError(
+            error instanceof Error
+              ? `No se pudo cargar el historial: ${error.message}`
+              : "No se pudo cargar el historial."
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -76,7 +124,7 @@ export function AiAssistantDrawer({
     audioBase64?: string;
     audioMimeType?: string;
   }) {
-    if (loading) return;
+    if (loading || historyLoading) return;
 
     const isVoice = Boolean(options.audioBase64);
     const displayContent = isVoice
@@ -99,11 +147,15 @@ export function AiAssistantDrawer({
     setLoading(true);
 
     try {
+      if (!isVoice) {
+        await persistMessage(userMsg.role, userMsg.content);
+      }
+
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: nextMessages.map((m) => ({
+          messages: nextMessages.slice(-12).map((m) => ({
             role: m.role,
             content: m.content,
           })),
@@ -118,13 +170,17 @@ export function AiAssistantDrawer({
 
       // Si n8n devuelve la transcripción de Whisper, actualizamos el mensaje del usuario
       if (res.ok && data.transcript && isVoice) {
+        const transcriptContent = `🎤 "${data.transcript}"`;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === userMsgId
-              ? { ...m, content: `🎤 "${data.transcript}"` }
+              ? { ...m, content: transcriptContent }
               : m
           )
         );
+        await persistMessage(userMsg.role, transcriptContent);
+      } else if (isVoice) {
+        await persistMessage(userMsg.role, userMsg.content);
       }
 
       const executedList: string[] = Array.isArray(data.executedActions)
@@ -149,25 +205,49 @@ export function AiAssistantDrawer({
         ? `${data.reply}${actionsBadge}`
         : `Error: ${data.error ?? "No se pudo conectar con n8n."}`;
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: replyText,
-        },
-      ]);
+      await appendAssistantMessage(replyText);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: "Error de red al consultar el webhook de n8n.",
-        },
-      ]);
+      if (isVoice) await persistMessage(userMsg.role, userMsg.content);
+      await appendAssistantMessage("Error de red al consultar el webhook de n8n.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function persistMessage(role: "user" | "assistant", content: string) {
+    try {
+      await saveAiMessage(role, content, activeArea);
+    } catch (error) {
+      setPersistenceError(
+        error instanceof Error
+          ? `No se pudo guardar el mensaje: ${error.message}`
+          : "No se pudo guardar el mensaje."
+      );
+    }
+  }
+
+  async function appendAssistantMessage(content: string) {
+    await persistMessage("assistant", content);
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: "assistant", content },
+    ]);
+  }
+
+  async function handleClearMessages() {
+    setClearing(true);
+    setPersistenceError(null);
+    try {
+      await clearAiMessages();
+      setMessages([]);
+    } catch (error) {
+      setPersistenceError(
+        error instanceof Error
+          ? `No se pudo limpiar la conversación: ${error.message}`
+          : "No se pudo limpiar la conversación."
+      );
+    } finally {
+      setClearing(false);
     }
   }
 
@@ -258,9 +338,10 @@ export function AiAssistantDrawer({
             {messages.length > 0 ? (
               <button
                 type="button"
-                onClick={() => setMessages([])}
+                onClick={handleClearMessages}
+                disabled={clearing || loading}
                 title="Limpiar conversación"
-                className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+                className="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200 disabled:opacity-40"
               >
                 <Trash2 className="size-4" />
               </button>
@@ -278,7 +359,21 @@ export function AiAssistantDrawer({
 
         {/* Historial de chat */}
         <div className="flex-1 space-y-4 overflow-y-auto p-4">
-          {messages.length === 0 ? (
+          {persistenceError ? (
+            <p
+              role="alert"
+              className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200"
+            >
+              {persistenceError}
+            </p>
+          ) : null}
+          {historyLoading && messages.length === 0 ? (
+            <div className="flex h-full items-center justify-center gap-2 text-xs text-zinc-500">
+              <Sparkles className="size-3.5 animate-pulse text-emerald-400" />
+              Cargando historial…
+            </div>
+          ) : null}
+          {!historyLoading && messages.length === 0 ? (
             <div className="flex h-full flex-col justify-center space-y-5 px-2">
               <div className="text-center">
                 <Bot className="mx-auto size-8 text-zinc-600" />
@@ -308,7 +403,7 @@ export function AiAssistantDrawer({
                 ))}
               </div>
             </div>
-          ) : (
+          ) : messages.length > 0 ? (
             messages.map((msg) => (
               <div
                 key={msg.id}
@@ -347,7 +442,7 @@ export function AiAssistantDrawer({
                 ) : null}
               </div>
             ))
-          )}
+          ) : null}
 
           {loading ? (
             <div className="flex items-center gap-2 text-xs text-zinc-500">
@@ -368,7 +463,7 @@ export function AiAssistantDrawer({
             <button
               type="button"
               onClick={toggleRecording}
-              disabled={loading}
+              disabled={loading || historyLoading}
               title={recording ? "Detener y enviar audio" : "Grabar nota de voz"}
               aria-label={recording ? "Detener grabación" : "Grabar audio"}
               className={`flex size-7 shrink-0 items-center justify-center rounded-lg transition ${
@@ -399,7 +494,7 @@ export function AiAssistantDrawer({
 
             <button
               type="submit"
-              disabled={!input.trim() || loading || recording}
+              disabled={!input.trim() || loading || historyLoading || recording}
               aria-label="Enviar mensaje"
               className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-950 transition hover:bg-white disabled:opacity-40"
             >

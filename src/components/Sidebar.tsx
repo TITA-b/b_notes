@@ -4,13 +4,16 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
+  Download,
   LogOut,
   Menu,
   Settings2,
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { downloadAllNotesAsZip } from "@/lib/exportNotes";
 import { getAreaIcon } from "@/lib/areaIcons";
+import { getAllNotes } from "@/services/notesService";
 import { AreaManagerModal } from "@/components/AreaManagerModal";
 import type { Area, AreaId } from "@/types/note";
 
@@ -32,6 +35,8 @@ export function Sidebar({
   const [statusOpen, setStatusOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [areaManagerOpen, setAreaManagerOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   async function signOut() {
     setSigningOut(true);
@@ -39,6 +44,24 @@ export function Sidebar({
     await supabase.auth.signOut();
     router.push("/login");
     router.refresh();
+  }
+
+  async function exportBackup() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const notes = await getAllNotes();
+      await downloadAllNotesAsZip(notes, areas);
+      setOpen(false);
+    } catch (error) {
+      setExportError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo exportar el backup."
+      );
+    } finally {
+      setExporting(false);
+    }
   }
 
   const navigation = (
@@ -99,6 +122,20 @@ export function Sidebar({
           <Settings2 className="size-4 text-zinc-500" />
           Gestionar áreas
         </button>
+        <button
+          type="button"
+          onClick={exportBackup}
+          disabled={exporting}
+          className="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50 disabled:opacity-60"
+        >
+          <Download className="size-4 text-zinc-500" />
+          {exporting ? "Preparando backup…" : "Exportar backup (.zip)"}
+        </button>
+        {exportError ? (
+          <p role="alert" className="px-3 text-xs leading-5 text-red-300">
+            {exportError}
+          </p>
+        ) : null}
         <button
           type="button"
           aria-expanded={statusOpen}

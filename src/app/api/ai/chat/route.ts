@@ -72,7 +72,9 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const messages: ChatMessage[] = body.messages ?? [];
+    const messages: ChatMessage[] = Array.isArray(body.messages)
+      ? body.messages.slice(-12)
+      : [];
     const requestedActiveArea =
       typeof body.activeArea === "string" ? body.activeArea.toLowerCase() : "";
     const activeArea =

@@ -8,6 +8,15 @@ export default function manifest(): MetadataRoute.Manifest {
     id: "/",
     start_url: "/",
     scope: "/",
+    share_target: {
+      action: "/",
+      method: "GET",
+      params: {
+        title: "share_title",
+        text: "share_text",
+        url: "share_url",
+      },
+    },
     display: "standalone",
     background_color: "#09090b",
     theme_color: "#09090b",

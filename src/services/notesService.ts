@@ -27,11 +27,15 @@ export async function getNotesByArea(area: AreaId): Promise<Note[]> {
   return (data ?? []) as Note[];
 }
 
-export async function createNote(area: AreaId, title = "Sin título"): Promise<Note> {
+export async function createNote(
+  area: AreaId,
+  title = "Sin título",
+  content = ""
+): Promise<Note> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from("notes")
-    .insert({ area, title, content: "", links: [] })
+    .insert({ area, title, content, links: [] })
     .select()
     .single();
 

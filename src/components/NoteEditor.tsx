@@ -27,6 +27,7 @@ import {
   ArrowLeft,
   Check,
   CheckSquare,
+  Download,
   ExternalLink,
   Heading1,
   Heading2,
@@ -46,6 +47,7 @@ import {
   getDriveImagePreviewUrl,
   getDriveViewUrl,
 } from "@/lib/driveMedia";
+import { downloadNoteAsMarkdown } from "@/lib/exportNotes";
 import {
   MediaLightboxModal,
   type LightboxMedia,
@@ -774,6 +776,21 @@ TaskItem.configure({
     scheduleSave({ title: newTitle.trim() || "Sin título" });
   }
 
+  function handleDownloadMarkdown() {
+    const storage = editor?.storage as
+      | { markdown?: { getMarkdown: () => string } }
+      | undefined;
+    const content = normalizeWikilinkMarkdown(
+      storage?.markdown?.getMarkdown() ?? note.content
+    );
+
+    downloadNoteAsMarkdown({
+      ...note,
+      title: title.trim() || "Sin título",
+      content,
+    });
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/80 px-4 py-2.5 md:px-8">
@@ -858,6 +875,16 @@ TaskItem.configure({
         </div>
 
         <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+          <button
+            type="button"
+            title="Descargar nota como Markdown"
+            aria-label="Descargar nota como Markdown"
+            onClick={handleDownloadMarkdown}
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100"
+          >
+            <Download className="size-3.5" />
+            <span>Markdown</span>
+          </button>
           {status === "saving" ? (
             <>
               <Loader2 className="size-3.5 animate-spin text-zinc-400" />

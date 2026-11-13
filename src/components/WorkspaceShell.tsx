@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CalendarCheck2,
+  ChevronDown,
   FileText,
+  FilePlus2,
   Network,
   NotebookPen,
   Plus,
@@ -17,7 +19,12 @@ import { TaskBoard } from "@/components/TaskBoard";
 import { KnowledgeGraph } from "@/components/KnowledgeGraph";
 import { AiAssistantDrawer } from "@/components/AiAssistantDrawer";
 import { GlobalSearchModal } from "@/components/GlobalSearchModal";
+import { QuickCaptureModal } from "@/components/QuickCaptureModal";
 import { getAreas } from "@/services/areasService";
+import {
+  getNoteTemplatesForArea,
+  type NoteTemplate,
+} from "@/lib/noteTemplates";
 import {
   createNote,
   deleteNote,
@@ -49,8 +56,12 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [mobileEditing, setMobileEditing] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
+  const [shareCaptureError, setShareCaptureError] = useState<string | null>(null);
   const [tasksRefreshKey, setTasksRefreshKey] = useState(0);
   const pendingNoteId = useRef<string | null>(null);
+  const templateMenuRef = useRef<HTMLDetailsElement>(null);
+  const shareTargetHandledRef = useRef(false);
   const notes =
     notesState.area === activeArea ? notesState.notes : [];
   const loading =
@@ -173,15 +184,15 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     }
   }
 
-  function updateNotes(updater: (current: Note[]) => Note[]) {
+  const updateNotes = useCallback((updater: (current: Note[]) => Note[]) => {
     setNotesState((current) =>
       current.area === activeArea
         ? { ...current, notes: updater(current.notes) }
         : current
     );
-  }
+  }, [activeArea]);
 
-  function handleSelectNote(note: Note) {
+  const handleSelectNote = useCallback((note: Note) => {
     setActiveTab("notes");
     if (note.area !== activeArea) {
       pendingNoteId.current = note.id;
@@ -197,13 +208,47 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     );
     setSelectedNoteId(note.id);
     setMobileEditing(true);
-  }
+  }, [activeArea, notesState.area, notesState.loading, updateNotes]);
 
-  async function handleCreateNote() {
-    const created = await createNote(activeArea);
+  useEffect(() => {
+    if (areas.length === 0 || shareTargetHandledRef.current) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const shareTitle = params.get("share_title");
+    const shareText = params.get("share_text");
+    const shareUrl = params.get("share_url");
+    if (shareTitle === null && shareText === null && shareUrl === null) return;
+
+    shareTargetHandledRef.current = true;
+    const title = shareTitle?.trim() || "Captura compartida";
+    const content = [shareText?.trim(), shareUrl?.trim()]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n");
+
+    createNote(activeArea, title, content)
+      .then((created) => {
+        handleSelectNote(created);
+        window.history.replaceState({}, "", "/");
+      })
+      .catch((error: unknown) => {
+        setShareCaptureError(
+          error instanceof Error
+            ? `No se pudo guardar la captura compartida: ${error.message}`
+            : "No se pudo guardar la captura compartida."
+        );
+      });
+  }, [activeArea, areas.length, handleSelectNote]);
+
+  async function handleCreateNote(template?: NoteTemplate) {
+    const created = await createNote(
+      activeArea,
+      template?.title,
+      template?.content
+    );
     updateNotes((prev) => [created, ...prev]);
     setSelectedNoteId(created.id);
     setMobileEditing(true);
+    if (template) templateMenuRef.current?.removeAttribute("open");
   }
 
   async function handleSaveNote(
@@ -244,9 +289,9 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   return (
     <div className="min-h-dvh bg-zinc-950 text-zinc-100 md:pl-72">
-      {areasError ? (
+      {areasError || shareCaptureError ? (
         <p role="alert" className="fixed top-16 right-4 z-[60] rounded-lg border border-red-900/70 bg-zinc-950 px-3 py-2 text-xs text-red-300">
-          {areasError}
+          {areasError ?? shareCaptureError}
         </p>
       ) : null}
       <Sidebar
@@ -354,14 +399,38 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                 <h2 className="text-sm font-semibold">
                   {activeAreaName}
                 </h2>
-                <button
-                  type="button"
-                  onClick={handleCreateNote}
-                  className="flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition hover:bg-white"
-                >
-                  <Plus className="size-3.5" />
-                  Nueva
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleCreateNote()}
+                    className="flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-1.5 text-xs font-medium text-zinc-950 transition hover:bg-white"
+                  >
+                    <Plus className="size-3.5" />
+                    Nueva
+                  </button>
+                  <details ref={templateMenuRef} className="relative">
+                    <summary
+                      title="Crear nota desde una plantilla"
+                      aria-label="Crear nota desde una plantilla"
+                      className="flex cursor-pointer list-none items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+                    >
+                      <FilePlus2 className="size-3.5" />
+                      <ChevronDown className="size-3" />
+                    </summary>
+                    <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-zinc-800 bg-zinc-950 p-1.5 shadow-xl">
+                      {getNoteTemplatesForArea(activeArea).map((template) => (
+                        <button
+                          key={template.id}
+                          type="button"
+                          onClick={() => handleCreateNote(template)}
+                          className="w-full rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
+                        >
+                          {template.name}
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                </div>
               </div>
 
               <div className="border-b border-zinc-800/80 p-3">
@@ -508,6 +577,30 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         onSelectNote={handleSelectNote}
         areas={areas}
       />
+
+      {activeTab !== "notes" || !mobileEditing ? (
+        <button
+          type="button"
+          onClick={() => setQuickCaptureOpen(true)}
+          aria-label="Abrir captura rápida"
+          title="Captura rápida"
+          className="fixed bottom-5 right-5 z-30 flex size-14 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 shadow-lg transition hover:bg-emerald-400 md:hidden"
+        >
+          <Plus className="size-6" />
+        </button>
+      ) : null}
+
+      {quickCaptureOpen ? (
+        <QuickCaptureModal
+          areas={areas}
+          activeArea={activeArea}
+          onClose={() => setQuickCaptureOpen(false)}
+          onNoteCreated={handleSelectNote}
+          onTaskCreated={() => {
+            setTasksRefreshKey((key) => key + 1);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
