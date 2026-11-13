@@ -83,6 +83,80 @@ export async function POST(request: NextRequest) {
   }
 }
 
+export async function PATCH(request: NextRequest) {
+  try {
+    const body = (await request.json()) as {
+      eventId?: unknown;
+      title?: unknown;
+      dueDate?: unknown;
+      area?: unknown;
+    };
+    if (
+      typeof body.eventId !== "string" ||
+      typeof body.title !== "string" ||
+      typeof body.area !== "string"
+    ) {
+      return NextResponse.json(
+        { error: "Faltan eventId, title o area." },
+        { status: 400 }
+      );
+    }
+
+    const calendar = await getAuthenticatedCalendar();
+    if (!calendar) {
+      return NextResponse.json(
+        { error: "Google Calendar no está conectado." },
+        { status: 401 }
+      );
+    }
+
+    const requestBody: {
+      summary: string;
+      start?: { dateTime: string };
+      end?: { dateTime: string };
+    } = {
+      summary: `[${body.area.toUpperCase()}] ${body.title}`,
+    };
+
+    if (typeof body.dueDate === "string" && body.dueDate) {
+      const startDate = new Date(body.dueDate);
+      if (Number.isNaN(startDate.getTime())) {
+        return NextResponse.json(
+          { error: "La fecha del evento no es válida." },
+          { status: 400 }
+        );
+      }
+      const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+      requestBody.start = { dateTime: startDate.toISOString() };
+      requestBody.end = { dateTime: endDate.toISOString() };
+    } else if (
+      body.dueDate !== undefined &&
+      body.dueDate !== null &&
+      body.dueDate !== ""
+    ) {
+      return NextResponse.json(
+        { error: "La fecha del evento no es válida." },
+        { status: 400 }
+      );
+    }
+
+    const updated = await calendar.events.patch({
+      calendarId: "primary",
+      eventId: body.eventId,
+      requestBody,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      eventId: updated.data.id ?? body.eventId,
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Error al actualizar evento";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
 export async function DELETE(request: NextRequest) {
   try {
     const eventId = request.nextUrl.searchParams.get("eventId");

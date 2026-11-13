@@ -40,6 +40,64 @@ export async function createTask(
   return data as Task;
 }
 
+export async function updateTask(
+  id: string,
+  updates: { title?: string; due_date?: string | null; area?: AreaId }
+): Promise<Task> {
+  const supabase = createClient();
+  const payload = {
+    ...updates,
+    ...(updates.title !== undefined ? { title: updates.title.trim() } : {}),
+    ...(updates.due_date !== undefined
+      ? {
+          due_date: updates.due_date
+            ? new Date(updates.due_date).toISOString()
+            : null,
+        }
+      : {}),
+  };
+  const { data, error } = await supabase
+    .from("tasks")
+    .update(payload)
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as Task;
+}
+
+export async function importCalendarEventAsTask(
+  area: AreaId,
+  event: { id: string; summary: string; start: string }
+): Promise<Task> {
+  const supabase = createClient();
+  const { data: existing, error: lookupError } = await supabase
+    .from("tasks")
+    .select("*")
+    .eq("gcal_event_id", event.id)
+    .maybeSingle();
+
+  if (lookupError) throw new Error(lookupError.message);
+  if (existing) return existing as Task;
+
+  const { data, error } = await supabase
+    .from("tasks")
+    .insert({
+      area,
+      title: event.summary,
+      due_date: event.start ? new Date(event.start).toISOString() : null,
+      completed: false,
+      sync_to_gcal: true,
+      gcal_event_id: event.id,
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as Task;
+}
+
 export async function updateTaskAttachments(
   id: string,
   attachments: TaskAttachment[]

@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element -- Google Drive thumbnails load directly from their public URL. */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
@@ -20,6 +20,7 @@ import {
   NodeViewWrapper,
   ReactNodeViewRenderer,
   useEditor,
+  type Editor,
   type NodeViewProps,
 } from "@tiptap/react";
 import {
@@ -36,7 +37,11 @@ import {
   Paperclip,
   Play,
 } from "lucide-react";
-import { getAllNotes } from "@/services/notesService";
+import {
+  findOrCreateNoteByTitle,
+  getAllNotes,
+} from "@/services/notesService";
+import { getAreas } from "@/services/areasService";
 import {
   getDriveImagePreviewUrl,
   getDriveViewUrl,
@@ -69,6 +74,17 @@ interface DriveUploadResponse {
   };
 }
 
+interface WikilinkAutocompleteState {
+  query: string;
+  from: number;
+  to: number;
+  left: number;
+  top: number;
+  activeIndex: number;
+}
+
+const EMPTY_NOTES: Note[] = [];
+
 function parseLinksLive(text: string): string[] {
   const cleanText = text.replace(/\\\[/g, "[").replace(/\\\]/g, "]");
   const regex = /\[\[([^\]]+)\]\]/g;
@@ -79,6 +95,10 @@ function parseLinksLive(text: string): string[] {
     if (val) set.add(val);
   }
   return Array.from(set);
+}
+
+function normalizeWikilinkMarkdown(markdown: string): string {
+  return markdown.replace(/\\\[\[([^\[\]\n]+)\\\]\]/g, "[[$1]]");
 }
 
 function unescapeMarkdownBrackets(text: string): string {
@@ -275,6 +295,26 @@ export function NoteEditor({
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [driveNeedsReconnect, setDriveNeedsReconnect] = useState(false);
+  const [wikilinkDataState, setWikilinkDataState] = useState<{
+    noteId: string;
+    notes: Note[];
+    areas: Area[];
+    error?: string;
+  } | null>(null);
+  const [wikilinkPopup, setWikilinkPopup] =
+    useState<WikilinkAutocompleteState | null>(null);
+  const [wikilinkOperationError, setWikilinkOperationError] = useState<
+    string | null
+  >(null);
+  const wikilinkPopupRef = useRef<WikilinkAutocompleteState | null>(null);
+  const editorRef = useRef<Editor | null>(null);
+  const updateWikilinkPopupRef = useRef<(currentEditor: Editor) => void>(
+    () => {}
+  );
+  const confirmWikilinkRef = useRef<(index: number) => void>(() => {});
+  const handleWikilinkKeyDownRef = useRef<(event: KeyboardEvent) => boolean>(
+    () => false
+  );
 
   useEffect(() => {
     openWikilinkRef.current = onOpenWikilink;
@@ -321,6 +361,43 @@ export function NoteEditor({
     };
   }, [note.id, note.title]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    Promise.all([getAllNotes(), getAreas()])
+      .then(([allNotes, loadedAreas]) => {
+        if (cancelled) return;
+        setWikilinkDataState({
+          noteId: note.id,
+          notes: allNotes.filter((item) => item.id !== note.id),
+          areas: loadedAreas,
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setWikilinkDataState({
+          noteId: note.id,
+          notes: [],
+          areas: [],
+          error:
+            error instanceof Error
+              ? error.message
+              : "No se pudieron cargar las notas para sugerir.",
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [note.id]);
+
+  const wikilinkData =
+    wikilinkDataState?.noteId === note.id ? wikilinkDataState : null;
+  const wikilinkNotes = wikilinkData?.notes ?? EMPTY_NOTES;
+  const wikilinkAreas = wikilinkData?.areas ?? areas;
+  const wikilinkDataError = wikilinkData?.error ?? null;
+  const wikilinkDataPending = wikilinkData === null;
+
   const backlinks =
     backlinksState?.noteId === note.id &&
     backlinksState.title === note.title.trim()
@@ -332,6 +409,168 @@ export function NoteEditor({
       ? backlinksErrorState.message
       : null;
   const areaNames = new Map(areas.map((area) => [area.slug, area.name]));
+
+  const wikilinkQuery = wikilinkPopup?.query;
+  const wikilinkSuggestions = useMemo(() => {
+    if (wikilinkQuery === undefined) return [];
+    const query = wikilinkQuery.toLocaleLowerCase();
+    return wikilinkNotes
+      .filter((item) => item.title.toLocaleLowerCase().includes(query))
+      .slice(0, 8);
+  }, [wikilinkNotes, wikilinkQuery]);
+  const hasExactWikilinkMatch = Boolean(
+    wikilinkPopup &&
+      [note, ...wikilinkNotes].some(
+        (item) =>
+          item.title.trim().toLocaleLowerCase() ===
+          wikilinkPopup.query.trim().toLocaleLowerCase()
+      )
+  );
+  const canCreateWikilink = Boolean(
+    wikilinkPopup &&
+      wikilinkPopup.query.trim().length > 0 &&
+      !wikilinkDataPending &&
+      !wikilinkDataError &&
+      !hasExactWikilinkMatch
+  );
+  const wikilinkOptionCount =
+    wikilinkSuggestions.length + (canCreateWikilink ? 1 : 0);
+
+  const closeWikilinkPopup = useCallback(() => {
+    wikilinkPopupRef.current = null;
+    setWikilinkPopup(null);
+  }, []);
+
+  const updateWikilinkPopup = useCallback((currentEditor: Editor) => {
+    const { selection } = currentEditor.state;
+    if (!selection.empty || !selection.$from.parent.isTextblock) {
+      closeWikilinkPopup();
+      return;
+    }
+
+    const { $from } = selection;
+    const textBeforeCursor = $from.parent.textBetween(
+      0,
+      $from.parentOffset,
+      "",
+      "\uFFFC"
+    );
+    const match = /\[\[([^\[\]\n]*)$/.exec(textBeforeCursor);
+    if (!match || typeof window === "undefined") {
+      closeWikilinkPopup();
+      return;
+    }
+
+    const from = $from.start() + match.index;
+    const to = selection.from;
+    const cursor = currentEditor.view.coordsAtPos(to);
+    const next: WikilinkAutocompleteState = {
+      query: match[1],
+      from,
+      to,
+      left: Math.max(8, Math.min(cursor.left, window.innerWidth - 348)),
+      top: cursor.bottom + 4,
+      activeIndex:
+        wikilinkPopupRef.current?.query === match[1]
+          ? wikilinkPopupRef.current.activeIndex
+          : 0,
+    };
+
+    wikilinkPopupRef.current = next;
+    setWikilinkPopup(next);
+  }, [closeWikilinkPopup]);
+
+  const confirmWikilink = useCallback(
+    (index: number) => {
+      const currentEditor = editorRef.current;
+      const popup = wikilinkPopupRef.current;
+      if (!currentEditor || !popup) return;
+
+      const selectedNote = wikilinkSuggestions[index];
+      const title = selectedNote?.title.trim() ??
+        (canCreateWikilink && index === wikilinkSuggestions.length
+          ? popup.query.trim()
+          : "");
+      if (!title) return;
+
+      setWikilinkOperationError(null);
+      currentEditor
+        .chain()
+        .focus()
+        .insertContentAt({ from: popup.from, to: popup.to }, `[[${title}]] `)
+        .run();
+      closeWikilinkPopup();
+
+      if (!selectedNote) {
+        void findOrCreateNoteByTitle(title, note.area)
+          .then((createdNote) => {
+            setWikilinkDataState((current) => {
+              if (!current || current.noteId !== note.id || current.error) {
+                return current;
+              }
+              return {
+                ...current,
+                notes: [
+                  createdNote,
+                  ...current.notes.filter((item) => item.id !== createdNote.id),
+                ],
+              };
+            });
+          })
+          .catch((error: unknown) => {
+            setWikilinkOperationError(
+              error instanceof Error
+                ? error.message
+                : "No se pudo crear la nota enlazada."
+            );
+          });
+      }
+    },
+    [
+      canCreateWikilink,
+      closeWikilinkPopup,
+      note.area,
+      note.id,
+      wikilinkSuggestions,
+    ]
+  );
+
+  const handleWikilinkKeyDown = useCallback((event: KeyboardEvent) => {
+    const popup = wikilinkPopupRef.current;
+    if (!popup) return false;
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeWikilinkPopup();
+      return true;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (wikilinkOptionCount > 0) {
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex =
+          (popup.activeIndex + direction + wikilinkOptionCount) %
+          wikilinkOptionCount;
+        const next = { ...popup, activeIndex: nextIndex };
+        wikilinkPopupRef.current = next;
+        setWikilinkPopup(next);
+      }
+      return true;
+    }
+
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      if (wikilinkOptionCount > 0) {
+        confirmWikilinkRef.current(
+          Math.min(popup.activeIndex, wikilinkOptionCount - 1)
+        );
+      }
+      return true;
+    }
+
+    return false;
+  }, [closeWikilinkPopup, wikilinkOptionCount]);
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -366,12 +605,20 @@ TaskItem.configure({
     ],
     content: note.content,
     editorProps: {
+      handleKeyDown: (_view, event) =>
+        handleWikilinkKeyDownRef.current(event),
       handleClick: (view, position, event) => {
         const title = findWikilinkAtPosition(view, position);
         if (!title) return false;
         event.preventDefault();
         openWikilinkRef.current(title);
         return true;
+      },
+      handleDOMEvents: {
+        blur: () => {
+          closeWikilinkPopup();
+          return false;
+        },
       },
       handlePaste: (_view, event) => {
         const images = Array.from(event.clipboardData?.files ?? []).filter(
@@ -407,14 +654,26 @@ TaskItem.configure({
       },
     },
     onUpdate: ({ editor: currentEditor }) => {
+      updateWikilinkPopupRef.current(currentEditor);
       const storage = currentEditor.storage as unknown as {
         markdown?: { getMarkdown: () => string };
       };
-      const markdown = storage.markdown?.getMarkdown() ?? currentEditor.getText();
+      const markdown = normalizeWikilinkMarkdown(
+        storage.markdown?.getMarkdown() ?? currentEditor.getText()
+      );
       setLiveLinks(parseLinksLive(markdown));
       scheduleSave({ content: markdown });
     },
+    onSelectionUpdate: ({ editor: currentEditor }) => {
+      updateWikilinkPopupRef.current(currentEditor);
+    },
   });
+  useEffect(() => {
+    updateWikilinkPopupRef.current = updateWikilinkPopup;
+    confirmWikilinkRef.current = confirmWikilink;
+    handleWikilinkKeyDownRef.current = handleWikilinkKeyDown;
+    editorRef.current = editor;
+  }, [confirmWikilink, editor, handleWikilinkKeyDown, updateWikilinkPopup]);
 
   const uploadNoteFiles = useCallback(async (files: File[]) => {
     if (!editor || files.length === 0 || uploadingFilesRef.current) return;
@@ -629,6 +888,14 @@ TaskItem.configure({
           ) : null}
         </p>
       ) : null}
+      {wikilinkOperationError ? (
+        <p
+          role="alert"
+          className="border-b border-amber-900/70 bg-amber-950/30 px-5 py-2 text-xs text-amber-200 md:px-10"
+        >
+          {wikilinkOperationError}
+        </p>
+      ) : null}
 
       <div className="flex-1 overflow-y-auto px-5 py-6 md:px-10">
         <input
@@ -639,8 +906,109 @@ TaskItem.configure({
           className="w-full bg-transparent text-2xl font-semibold tracking-tight text-zinc-100 placeholder-zinc-600 outline-none"
         />
 
-        <div className="mt-6">
+        <div className="relative mt-6">
           <EditorContent editor={editor} />
+          {wikilinkPopup ? (
+            <div
+              role="listbox"
+              aria-label="Sugerencias de wikilinks"
+              className="fixed z-[70] overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-950 p-1.5 shadow-2xl"
+              style={{
+                left: wikilinkPopup.left,
+                top: wikilinkPopup.top,
+                width: "min(21rem, calc(100vw - 1rem))",
+                maxHeight: "min(20rem, calc(100vh - 1rem))",
+              }}
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              {wikilinkDataError ? (
+                <p role="alert" className="px-3 py-2 text-xs text-red-300">
+                  {wikilinkDataError}
+                </p>
+              ) : wikilinkDataPending ? (
+                <p className="px-3 py-2 text-xs text-zinc-500">
+                  Cargando notas…
+                </p>
+              ) : (
+                <>
+                  {wikilinkSuggestions.map((suggestion, index) => {
+                    const area = wikilinkAreas.find(
+                      (item) => item.slug === suggestion.area
+                    );
+                    const isActive = wikilinkPopup.activeIndex === index;
+
+                    return (
+                      <button
+                        key={suggestion.id}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onMouseEnter={() => {
+                          const next = { ...wikilinkPopup, activeIndex: index };
+                          wikilinkPopupRef.current = next;
+                          setWikilinkPopup(next);
+                        }}
+                        onClick={() => confirmWikilinkRef.current(index)}
+                        className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm ${
+                          isActive
+                            ? "bg-zinc-800 text-zinc-50"
+                            : "text-zinc-300 hover:bg-zinc-900"
+                        }`}
+                      >
+                        <span className="min-w-0 truncate">
+                          {suggestion.title || "Sin título"}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
+                          <span
+                            aria-hidden="true"
+                            className="size-1.5 rounded-full"
+                            style={{
+                              backgroundColor: area?.color ?? "#71717a",
+                            }}
+                          />
+                          {area?.name ?? suggestion.area}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {canCreateWikilink ? (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={
+                        wikilinkPopup.activeIndex === wikilinkSuggestions.length
+                      }
+                      onMouseDown={(event) => event.preventDefault()}
+                      onMouseEnter={() => {
+                        const next = {
+                          ...wikilinkPopup,
+                          activeIndex: wikilinkSuggestions.length,
+                        };
+                        wikilinkPopupRef.current = next;
+                        setWikilinkPopup(next);
+                      }}
+                      onClick={() =>
+                        confirmWikilinkRef.current(wikilinkSuggestions.length)
+                      }
+                      className={`mt-1 w-full rounded-lg border-t border-zinc-800 px-3 py-2 text-left text-xs ${
+                        wikilinkPopup.activeIndex === wikilinkSuggestions.length
+                          ? "bg-zinc-800 text-emerald-300"
+                          : "text-emerald-400 hover:bg-zinc-900"
+                      }`}
+                    >
+                      + Crear y enlazar &quot;[[{wikilinkPopup.query.trim()}]]&quot;
+                    </button>
+                  ) : null}
+                  {wikilinkSuggestions.length === 0 && !canCreateWikilink ? (
+                    <p className="px-3 py-2 text-xs text-zinc-500">
+                      No hay notas que coincidan.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 

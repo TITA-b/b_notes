@@ -9,8 +9,10 @@ import {
   Check,
   CheckCircle2,
   Circle,
+  ArrowDownLeft,
   ExternalLink,
   Paperclip,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -21,8 +23,10 @@ import {
   createTask,
   deleteTask,
   getTasksByArea,
+  importCalendarEventAsTask,
   toggleTaskCompleted,
   updateTaskAttachments,
+  updateTask,
 } from "@/services/tasksService";
 import type { AreaId } from "@/types/note";
 import type { Task, TaskAttachment } from "@/types/task";
@@ -182,6 +186,15 @@ function formatDueDate(iso: string | null) {
   }).format(date);
 }
 
+function toDateTimeLocal(iso: string | null) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
+
 function isOverdue(
   iso: string | null,
   completed: boolean,
@@ -197,6 +210,15 @@ export function TaskBoard({ area, areaName }: TaskBoardProps) {
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDueDate, setEditDueDate] = useState("");
+  const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [importingEventId, setImportingEventId] = useState<string | null>(null);
+  const [linkedEventIds, setLinkedEventIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [draftAttachments, setDraftAttachments] = useState<TaskAttachment[]>([]);
   const [uploadingTarget, setUploadingTarget] = useState<string | null>(null);
   const [deletingAttachmentId, setDeletingAttachmentId] = useState<string | null>(null);
@@ -291,6 +313,88 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
       setDraftAttachments([]);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  function startTaskEdit(task: Task) {
+    setTaskError(null);
+    setEditingTaskId(task.id);
+    setEditTitle(task.title);
+    setEditDueDate(toDateTimeLocal(task.due_date));
+  }
+
+  async function handleSaveTaskEdit(event: FormEvent, task: Task) {
+    event.preventDefault();
+    if (!editTitle.trim() || savingTaskId) return;
+
+    setSavingTaskId(task.id);
+    setTaskError(null);
+    try {
+      const updatedTask = await updateTask(task.id, {
+        title: editTitle.trim(),
+        due_date: editDueDate || null,
+      });
+      setTasks((current) =>
+        current.map((item) => (item.id === task.id ? updatedTask : item))
+      );
+      setEditingTaskId(null);
+
+      if (task.sync_to_gcal && task.gcal_event_id) {
+        const response = await fetch("/api/google/events", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            eventId: task.gcal_event_id,
+            title: updatedTask.title,
+            dueDate: updatedTask.due_date,
+            area: updatedTask.area,
+          }),
+        });
+        const data = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(data.error ?? "No se pudo actualizar Calendar.");
+        }
+        await loadCalendar(false);
+      }
+    } catch (error: unknown) {
+      setTaskError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo guardar la tarea."
+      );
+    } finally {
+      setSavingTaskId(null);
+    }
+  }
+
+  async function handleImportCalendarEvent(event: GCalEvent) {
+    if (!event.id || importingEventId) return;
+
+    setImportingEventId(event.id);
+    setTaskError(null);
+    try {
+      const importedTask = await importCalendarEventAsTask(area, {
+        id: event.id,
+        summary: event.summary,
+        start: event.start,
+      });
+      if (importedTask.area === area) {
+        setTasks((current) =>
+          current.some((item) => item.id === importedTask.id)
+            ? current
+            : [importedTask, ...current]
+        );
+      } else {
+        setLinkedEventIds((current) => new Set(current).add(event.id));
+      }
+    } catch (error: unknown) {
+      setTaskError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo importar el evento a tareas."
+      );
+    } finally {
+      setImportingEventId(null);
     }
   }
 
@@ -530,6 +634,14 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
             ) : null}
           </div>
         ) : null}
+        {taskError ? (
+          <div
+            role="alert"
+            className="mt-3 rounded-lg border border-red-900/70 bg-red-950/30 px-3 py-2 text-xs text-red-200"
+          >
+            {taskError}
+          </div>
+        ) : null}
 
         <form
           onSubmit={handleAdd}
@@ -623,91 +735,149 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                       key={task.id}
                       className="group rounded-xl border border-zinc-800/90 bg-zinc-900/40 px-4 py-3 transition hover:border-zinc-700"
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <button
-                          type="button"
-                          onClick={() => handleToggle(task)}
-                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      {editingTaskId === task.id ? (
+                        <form
+                          onSubmit={(event) =>
+                            void handleSaveTaskEdit(event, task)
+                          }
+                          className="space-y-2"
                         >
-                          <Circle className="size-4 shrink-0 text-zinc-500 transition hover:text-emerald-400" />
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm text-zinc-100">{task.title}</p>
-                            {formatted ? (
-                              <p
-                                className={`mt-1 flex items-center gap-1 text-xs ${
-                                  overdue ? "text-red-400" : "text-zinc-500"
-                                }`}
-                              >
-                                <Calendar className="size-3" />
-                                {formatted} {overdue ? "(Vencida)" : ""}
-                              </p>
-                            ) : null}
-                          </div>
-                        </button>
-
-                        <div className="flex shrink-0 items-center gap-1">
-                          {gcalConnected ? (
-                            task.sync_to_gcal ? (
-                              <span
-                                title="Sincronizada en Google Calendar"
-                                className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-400"
-                              >
-                                <Check className="size-3" />
-                                En Calendar
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={syncingTaskId === task.id}
-                                onClick={() => handleSyncToGCal(task)}
-                                title="Enviar a Google Calendar"
-                                className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-white disabled:opacity-50"
-                              >
-                                <CalendarPlus className="size-3" />
-                                {syncingTaskId === task.id
-                                  ? "Subiendo…"
-                                  : "Agendar"}
-                              </button>
-                            )
-                          ) : null}
-
-                          <label
-                            title={
-                              uploadingTarget === task.id
-                                ? "Subiendo adjunto…"
-                                : "Adjuntar archivos a esta tarea"
+                          <input
+                            type="text"
+                            aria-label="Título de la tarea"
+                            value={editTitle}
+                            onChange={(event) =>
+                              setEditTitle(event.target.value)
                             }
-                            className={`cursor-pointer rounded p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 ${
-                              uploadingTarget === task.id ? "animate-pulse" : ""
-                            }`}
-                          >
-                            <Paperclip className="size-3.5" />
+                            className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
+                          />
+                          <div className="flex flex-wrap items-center gap-2">
                             <input
-                              type="file"
-                              multiple
-                              aria-label={`Adjuntar archivos a ${task.title}`}
-                              disabled={uploadingTarget !== null}
-                              className="sr-only"
-                              onChange={(event) => {
-                                const files = Array.from(
-                                  event.currentTarget.files ?? []
-                                );
-                                event.currentTarget.value = "";
-                                void handleTaskUpload(task, files);
-                              }}
+                              type="datetime-local"
+                              aria-label="Fecha y hora de la tarea"
+                              value={editDueDate}
+                              onChange={(event) =>
+                                setEditDueDate(event.target.value)
+                              }
+                              className="h-9 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 text-xs text-zinc-300 outline-none focus:border-zinc-600 [color-scheme:dark]"
                             />
-                          </label>
-
+                            <button
+                              type="submit"
+                              disabled={!editTitle.trim() || savingTaskId === task.id}
+                              className="flex h-9 items-center gap-1.5 rounded-lg bg-zinc-100 px-3 text-xs font-medium text-zinc-950 transition hover:bg-white disabled:opacity-50"
+                            >
+                              <Check className="size-3.5" />
+                              {savingTaskId === task.id
+                                ? "Guardando…"
+                                : "Guardar"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={savingTaskId === task.id}
+                              onClick={() => setEditingTaskId(null)}
+                              className="h-9 rounded-lg border border-zinc-800 px-3 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3">
                           <button
                             type="button"
-                            aria-label="Eliminar tarea"
-                            onClick={() => handleDelete(task)}
-                            className="rounded p-1.5 text-zinc-600 opacity-0 transition hover:bg-zinc-800 hover:text-red-300 group-hover:opacity-100"
+                            onClick={() => handleToggle(task)}
+                            className="flex min-w-0 flex-1 items-center gap-3 text-left"
                           >
-                            <Trash2 className="size-3.5" />
+                            <Circle className="size-4 shrink-0 text-zinc-500 transition hover:text-emerald-400" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm text-zinc-100">{task.title}</p>
+                              {formatted ? (
+                                <p
+                                  className={`mt-1 flex items-center gap-1 text-xs ${
+                                    overdue ? "text-red-400" : "text-zinc-500"
+                                  }`}
+                                >
+                                  <Calendar className="size-3" />
+                                  {formatted} {overdue ? "(Vencida)" : ""}
+                                </p>
+                              ) : null}
+                            </div>
                           </button>
+
+                          <div className="flex shrink-0 items-center gap-1">
+                            {gcalConnected ? (
+                              task.sync_to_gcal ? (
+                                <span
+                                  title="Sincronizada en Google Calendar"
+                                  className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-400"
+                                >
+                                  <Check className="size-3" />
+                                  En Calendar
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={syncingTaskId === task.id}
+                                  onClick={() => handleSyncToGCal(task)}
+                                  title="Enviar a Google Calendar"
+                                  className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-white disabled:opacity-50"
+                                >
+                                  <CalendarPlus className="size-3" />
+                                  {syncingTaskId === task.id
+                                    ? "Subiendo…"
+                                    : "Agendar"}
+                                </button>
+                              )
+                            ) : null}
+
+                            <button
+                              type="button"
+                              aria-label={`Editar ${task.title}`}
+                              title="Editar tarea"
+                              onClick={() => startTaskEdit(task)}
+                              className="rounded p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
+                            >
+                              <Pencil className="size-3.5" />
+                            </button>
+
+                            <label
+                              title={
+                                uploadingTarget === task.id
+                                  ? "Subiendo adjunto…"
+                                  : "Adjuntar archivos a esta tarea"
+                              }
+                              className={`cursor-pointer rounded p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 ${
+                                uploadingTarget === task.id ? "animate-pulse" : ""
+                              }`}
+                            >
+                              <Paperclip className="size-3.5" />
+                              <input
+                                type="file"
+                                multiple
+                                aria-label={`Adjuntar archivos a ${task.title}`}
+                                disabled={uploadingTarget !== null}
+                                className="sr-only"
+                                onChange={(event) => {
+                                  const files = Array.from(
+                                    event.currentTarget.files ?? []
+                                  );
+                                  event.currentTarget.value = "";
+                                  void handleTaskUpload(task, files);
+                                }}
+                              />
+                            </label>
+
+                            <button
+                              type="button"
+                              aria-label="Eliminar tarea"
+                              onClick={() => handleDelete(task)}
+                              className="rounded p-1.5 text-zinc-600 opacity-0 transition hover:bg-zinc-800 hover:text-red-300 group-hover:opacity-100"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      )}
                       <div className="mt-2 pl-7">
                         <AttachmentChips
                           attachments={task.attachments ?? []}
@@ -851,6 +1021,25 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                   <p className="mt-1 text-[11px] text-zinc-500">
                     {formatDueDate(ev.start) ?? ev.start}
                   </p>
+                  {tasks.some((task) => task.gcal_event_id === ev.id) ||
+                  linkedEventIds.has(ev.id) ? (
+                    <span className="mt-2 inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-400">
+                      <Check className="size-3" />
+                      Vinculado
+                    </span>
+                  ) : ev.id ? (
+                    <button
+                      type="button"
+                      disabled={importingEventId !== null}
+                      onClick={() => void handleImportCalendarEvent(ev)}
+                      className="mt-2 inline-flex items-center gap-1 rounded-md border border-zinc-800 px-2 py-1 text-[10px] text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-100 disabled:opacity-50"
+                    >
+                      <ArrowDownLeft className="size-3" />
+                      {importingEventId === ev.id
+                        ? "Importando…"
+                        : "Importar a tareas"}
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>

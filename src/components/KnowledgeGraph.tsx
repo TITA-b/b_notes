@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Network, Sparkles } from "lucide-react";
+import {
+  Eye,
+  EyeOff,
+  Minus,
+  Network,
+  Plus,
+  RotateCcw,
+  Search,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { getAllNotes } from "@/services/notesService";
 import { getAreas } from "@/services/areasService";
 import type { Area, AreaId, Note } from "@/types/note";
@@ -39,6 +49,29 @@ function extractWikiLinks(content: string): string[] {
   return matches;
 }
 
+function getNoteExcerpt(content: string): string {
+  const cleanContent = content
+    .replace(/\\\[/g, "[")
+    .replace(/\\\]/g, "]")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/(?:https?:\/\/|www\.)\S+/gi, " ")
+    .replace(/[`*_~#|]/g, " ")
+    .replace(/[\[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleanContent.length > 180
+    ? `${cleanContent.slice(0, 177).trimEnd()}…`
+    : cleanContent;
+}
+
 export function KnowledgeGraph({
   activeArea,
   onSelectNote,
@@ -51,6 +84,9 @@ export function KnowledgeGraph({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [panning, setPanning] = useState(false);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [hideOrphans, setHideOrphans] = useState(false);
   const [viewBox, setViewBox] = useState({
     x: 0,
     y: 0,
@@ -61,6 +97,14 @@ export function KnowledgeGraph({
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const simNodesRef = useRef<GraphNode[]>([]);
+  const draggingIdRef = useRef<string | null>(null);
+  const viewBoxRef = useRef(viewBox);
+  const nodePointerStartRef = useRef<{
+    id: string;
+    clientX: number;
+    clientY: number;
+    dragged: boolean;
+  } | null>(null);
   const panStartRef = useRef<{
     clientX: number;
     clientY: number;
@@ -217,7 +261,7 @@ export function KnowledgeGraph({
       }
 
       for (const n of nodes) {
-        if (n.id === draggingId) continue;
+        if (n.id === draggingIdRef.current) continue;
         n.vx += (width / 2 - n.x) * 0.004;
         n.vy += (height / 2 - n.y) * 0.004;
         n.vx *= 0.85;
@@ -232,7 +276,11 @@ export function KnowledgeGraph({
 
     animId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(animId);
-  }, [initialNodes, edges, draggingId]);
+  }, [initialNodes, edges]);
+
+  useEffect(() => {
+    viewBoxRef.current = viewBox;
+  }, [viewBox]);
 
   const connectedToHovered = useMemo(() => {
     if (!hoveredId) return new Set<string>();
@@ -244,21 +292,117 @@ export function KnowledgeGraph({
     return set;
   }, [hoveredId, edges]);
 
+  const visibleNodes = useMemo(
+    () =>
+      hideOrphans
+        ? renderedNodes.filter((node) => node.degree > 0)
+        : renderedNodes,
+    [hideOrphans, renderedNodes]
+  );
+  const visibleNodeIds = useMemo(
+    () => new Set(visibleNodes.map((node) => node.id)),
+    [visibleNodes]
+  );
+  const visibleEdges = useMemo(
+    () =>
+      edges.filter(
+        (edge) =>
+          visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
+      ),
+    [edges, visibleNodeIds]
+  );
+  const hasCanvas = !loading && !loadError && visibleNodes.length > 0;
+  useEffect(() => {
+    if (!hasCanvas) return;
+    const graphSvg = svgRef.current;
+    if (!graphSvg) return;
+
+    function handleWheel(event: WheelEvent) {
+      event.preventDefault();
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const pointerX = (event.clientX - rect.left) / rect.width;
+      const pointerY = (event.clientY - rect.top) / rect.height;
+      const current = viewBoxRef.current;
+      const zoomFactor = event.deltaY < 0 ? 0.9 : 1.1;
+      const width = Math.min(1800, Math.max(180, current.width * zoomFactor));
+      const height = Math.min(1200, Math.max(120, current.height * zoomFactor));
+      const graphX = current.x + pointerX * current.width;
+      const graphY = current.y + pointerY * current.height;
+      const nextViewBox = {
+        x: graphX - pointerX * width,
+        y: graphY - pointerY * height,
+        width,
+        height,
+      };
+
+      viewBoxRef.current = nextViewBox;
+      setViewBox(nextViewBox);
+    }
+
+    graphSvg.addEventListener("wheel", handleWheel, { passive: false });
+    return () => graphSvg.removeEventListener("wheel", handleWheel);
+  }, [hasCanvas]);
+
+  const selectedNode =
+    visibleNodes.find((node) => node.id === selectedNodeId) ?? null;
+  const connectedNodes = useMemo(() => {
+    if (!selectedNode) return [];
+    const connectedIds = edges.flatMap((edge) => {
+      if (edge.source === selectedNode.id) return [edge.target];
+      if (edge.target === selectedNode.id) return [edge.source];
+      return [];
+    });
+    return connectedIds
+      .map((id) => visibleNodes.find((node) => node.id === id))
+      .filter((node): node is GraphNode => node !== undefined);
+  }, [edges, selectedNode, visibleNodes]);
+
+  function focusNode(nodeId: string) {
+    setSelectedNodeId(nodeId);
+    const node = simNodesRef.current.find((item) => item.id === nodeId);
+    if (node) {
+      const current = viewBoxRef.current;
+      const nextViewBox = {
+        ...current,
+        x: node.x - current.width / 2,
+        y: node.y - current.height / 2,
+      };
+      viewBoxRef.current = nextViewBox;
+      setViewBox(nextViewBox);
+    }
+  }
+
   function handlePointerMove(e: React.PointerEvent<SVGSVGElement>) {
     const panStart = panStartRef.current;
     if (panStart) {
-      setViewBox({
+      const nextViewBox = {
         x: panStart.x - (e.clientX - panStart.clientX) * panStart.scaleX,
         y: panStart.y - (e.clientY - panStart.clientY) * panStart.scaleY,
         width: panStart.width,
         height: panStart.height,
-      });
+      };
+      viewBoxRef.current = nextViewBox;
+      setViewBox(nextViewBox);
       return;
     }
     if (!draggingId || !svgRef.current) return;
+    const nodePointerStart = nodePointerStartRef.current;
+    if (nodePointerStart) {
+      const distance = Math.hypot(
+        e.clientX - nodePointerStart.clientX,
+        e.clientY - nodePointerStart.clientY
+      );
+      if (distance > 4) nodePointerStart.dragged = true;
+    }
     const rect = svgRef.current.getBoundingClientRect();
-    const x = viewBox.x + ((e.clientX - rect.left) / rect.width) * viewBox.width;
-    const y = viewBox.y + ((e.clientY - rect.top) / rect.height) * viewBox.height;
+    const currentViewBox = viewBoxRef.current;
+    const x =
+      currentViewBox.x +
+      ((e.clientX - rect.left) / rect.width) * currentViewBox.width;
+    const y =
+      currentViewBox.y +
+      ((e.clientY - rect.top) / rect.height) * currentViewBox.height;
 
     const node = simNodesRef.current.find((n) => n.id === draggingId);
     if (node) {
@@ -272,15 +416,16 @@ export function KnowledgeGraph({
   function handleCanvasPointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (e.target !== e.currentTarget) return;
     const rect = e.currentTarget.getBoundingClientRect();
+    const currentViewBox = viewBoxRef.current;
     panStartRef.current = {
       clientX: e.clientX,
       clientY: e.clientY,
-      x: viewBox.x,
-      y: viewBox.y,
-      width: viewBox.width,
-      height: viewBox.height,
-      scaleX: viewBox.width / rect.width,
-      scaleY: viewBox.height / rect.height,
+      x: currentViewBox.x,
+      y: currentViewBox.y,
+      width: currentViewBox.width,
+      height: currentViewBox.height,
+      scaleX: currentViewBox.width / rect.width,
+      scaleY: currentViewBox.height / rect.height,
     };
     e.currentTarget.setPointerCapture(e.pointerId);
     setPanning(true);
@@ -288,36 +433,42 @@ export function KnowledgeGraph({
 
   function handlePointerEnd() {
     panStartRef.current = null;
+    nodePointerStartRef.current = null;
+    draggingIdRef.current = null;
     setPanning(false);
     setDraggingId(null);
   }
 
-  function handleWheel(e: React.WheelEvent<SVGSVGElement>) {
-    e.preventDefault();
-    const svg = svgRef.current;
-    if (!svg) return;
-
-    const rect = svg.getBoundingClientRect();
-    const pointerX = (e.clientX - rect.left) / rect.width;
-    const pointerY = (e.clientY - rect.top) / rect.height;
-    const zoomFactor = e.deltaY < 0 ? 0.9 : 1.1;
-    const width = Math.min(1800, Math.max(180, viewBox.width * zoomFactor));
-    const height = Math.min(1200, Math.max(120, viewBox.height * zoomFactor));
-    const graphX = viewBox.x + pointerX * viewBox.width;
-    const graphY = viewBox.y + pointerY * viewBox.height;
-
-    setViewBox({
-      x: graphX - pointerX * width,
-      y: graphY - pointerY * height,
+  function zoomBy(factor: number) {
+    const current = viewBoxRef.current;
+    const width = Math.min(1800, Math.max(180, current.width * factor));
+    const height = Math.min(1200, Math.max(120, current.height * factor));
+    const centerX = current.x + current.width / 2;
+    const centerY = current.y + current.height / 2;
+    const nextViewBox = {
+      x: centerX - width / 2,
+      y: centerY - height / 2,
       width,
       height,
-    });
+    };
+    viewBoxRef.current = nextViewBox;
+    setViewBox(nextViewBox);
+  }
+
+  function resetView() {
+    const initialViewBox = { x: 0, y: 0, width: 900, height: 600 };
+    viewBoxRef.current = initialViewBox;
+    setViewBox(initialViewBox);
   }
 
   const nodeById = useMemo(
-    () => new Map(renderedNodes.map((n) => [n.id, n])),
-    [renderedNodes]
+    () => new Map(visibleNodes.map((n) => [n.id, n])),
+    [visibleNodes]
   );
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const selectedArea = selectedNode
+    ? areaBySlug.get(selectedNode.area)
+    : undefined;
 
   return (
     <div className="flex h-full flex-col bg-zinc-950">
@@ -328,11 +479,41 @@ export function KnowledgeGraph({
             Mapa de Conocimiento
           </h2>
           <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-400">
-            {renderedNodes.length} notas · {edges.length} conexiones
+            {visibleNodes.length} notas · {visibleEdges.length} conexiones
           </span>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center justify-end gap-2.5">
+          <label className="flex h-8 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 text-zinc-500 focus-within:border-zinc-600">
+            <Search className="size-3.5 shrink-0" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Buscar nodo…"
+              aria-label="Buscar nodo"
+              className="w-28 bg-transparent text-xs text-zinc-200 outline-none placeholder:text-zinc-600 sm:w-36"
+            />
+          </label>
+
+          <button
+            type="button"
+            aria-pressed={hideOrphans}
+            onClick={() => setHideOrphans((current) => !current)}
+            className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition ${
+              hideOrphans
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-100"
+            }`}
+          >
+            {hideOrphans ? (
+              <Eye className="size-3.5" />
+            ) : (
+              <EyeOff className="size-3.5" />
+            )}
+            {hideOrphans ? "Mostrar huérfanas" : "Ocultar huérfanas"}
+          </button>
+
           <div className="hidden items-center gap-3 sm:flex">
             {areas.map((area) => (
               <span
@@ -387,15 +568,18 @@ export function KnowledgeGraph({
           >
             {loadError}
           </div>
-        ) : renderedNodes.length === 0 ? (
+        ) : visibleNodes.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center p-6 text-center">
             <Sparkles className="size-7 text-zinc-700" />
             <p className="mt-2 text-sm text-zinc-300">
-              Todavía no hay notas para graficar
+              {hideOrphans
+                ? "No hay notas conectadas para mostrar"
+                : "Todavía no hay notas para graficar"}
             </p>
             <p className="mt-1 max-w-xs text-xs text-zinc-500">
-              Usá <code className="text-zinc-300">[[Nombre de otra nota]]</code>{" "}
-              dentro de tus apuntes para conectar ideas automáticamente.
+              {hideOrphans
+                ? "Desactivá «Ocultar huérfanas» para ver todas las notas."
+                : "Usá [[Nombre de otra nota]] dentro de tus apuntes para conectar ideas automáticamente."}
             </p>
           </div>
         ) : (
@@ -405,16 +589,18 @@ export function KnowledgeGraph({
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerEnd}
+            onPointerCancel={handlePointerEnd}
             onPointerLeave={() => {
-              if (!panStartRef.current) setDraggingId(null);
+              if (!panStartRef.current && !nodePointerStartRef.current) {
+                setHoveredId(null);
+              }
             }}
-            onWheel={handleWheel}
             className={`h-full w-full select-none ${
               panning || draggingId ? "cursor-grabbing" : "cursor-grab"
             }`}
             style={{ touchAction: "none" }}
           >
-            {edges.map((edge, idx) => {
+            {visibleEdges.map((edge, idx) => {
               const s = nodeById.get(edge.source);
               const t = nodeById.get(edge.target);
               if (!s || !t) return null;
@@ -452,10 +638,18 @@ export function KnowledgeGraph({
             })}
 
             {renderedNodes.map((node) => {
+              if (!visibleNodeIds.has(node.id)) return null;
               const radius = 6 + Math.min(node.degree * 2.5, 10);
               const isHovered = hoveredId === node.id;
               const isConnected = connectedToHovered.has(node.id);
-              const isDimmed = hoveredId && !isConnected;
+              const isSearchMatch =
+                normalizedSearch.length > 0 &&
+                node.title.toLocaleLowerCase().includes(normalizedSearch);
+              const isSelected = selectedNodeId === node.id;
+              const isDimmed =
+                (Boolean(hoveredId) && !isConnected) ||
+                (normalizedSearch.length > 0 && !isSearchMatch);
+              const isEmphasized = isHovered || isSearchMatch || isSelected;
 
               return (
                 <g
@@ -464,26 +658,51 @@ export function KnowledgeGraph({
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     e.currentTarget.setPointerCapture(e.pointerId);
+                    nodePointerStartRef.current = {
+                      id: node.id,
+                      clientX: e.clientX,
+                      clientY: e.clientY,
+                      dragged: false,
+                    };
+                    draggingIdRef.current = node.id;
                     setDraggingId(node.id);
                   }}
-                  onClick={() => onSelectNote(node.note)}
+                  onPointerUp={() => {
+                    const pointerStart = nodePointerStartRef.current;
+                    if (pointerStart?.id === node.id && !pointerStart.dragged) {
+                      focusNode(node.id);
+                    }
+                    nodePointerStartRef.current = null;
+                    draggingIdRef.current = null;
+                    setDraggingId(null);
+                  }}
+                  onDoubleClick={() => onSelectNote(node.note)}
                   onMouseEnter={() => setHoveredId(node.id)}
                   onMouseLeave={() => setHoveredId(null)}
                   className="cursor-pointer transition-opacity duration-150"
                   style={{ opacity: isDimmed ? 0.2 : 1 }}
                 >
+                  {isSearchMatch || isSelected ? (
+                    <circle
+                      r={radius + 6}
+                      fill="none"
+                      stroke="#34d399"
+                      strokeWidth={2}
+                      strokeOpacity={isSelected ? 0.85 : 0.65}
+                    />
+                  ) : null}
                   <circle
-                    r={isHovered ? radius + 3 : radius}
+                    r={isEmphasized ? radius + 3 : radius}
                     fill={areaBySlug.get(node.area)?.color ?? "#71717a"}
-                    stroke="#09090b"
-                    strokeWidth={2}
+                    stroke={isSearchMatch || isSelected ? "#34d399" : "#09090b"}
+                    strokeWidth={isSearchMatch || isSelected ? 3 : 2}
                   />
                   <text
                     y={radius + 14}
                     textAnchor="middle"
-                    fill={isHovered ? "#ffffff" : "#a1a1aa"}
-                    fontSize={isHovered ? 12 : 11}
-                    fontWeight={isHovered ? 600 : 400}
+                    fill={isEmphasized ? "#ffffff" : "#a1a1aa"}
+                    fontSize={isEmphasized ? 12 : 11}
+                    fontWeight={isEmphasized ? 600 : 400}
                   >
                     {node.title.length > 26
                       ? `${node.title.slice(0, 26)}…`
@@ -495,8 +714,122 @@ export function KnowledgeGraph({
           </svg>
         )}
 
+        {selectedNode ? (
+          <aside className="absolute right-4 top-4 z-20 w-80 max-w-[calc(100vw-2rem)] rounded-xl border border-zinc-800 bg-zinc-950/95 p-4 shadow-2xl backdrop-blur">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                  Inspección rápida
+                </p>
+                <h3 className="mt-1 truncate text-sm font-semibold text-zinc-100">
+                  {selectedNode.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar inspección"
+                onClick={() => setSelectedNodeId(null)}
+                className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-100"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-800 px-2 py-1 text-[10px] text-zinc-300">
+                <span
+                  aria-hidden="true"
+                  className="size-2 rounded-full"
+                  style={{
+                    backgroundColor: selectedArea?.color ?? "#71717a",
+                  }}
+                />
+                {selectedArea?.name ?? selectedNode.area}
+              </span>
+              <span className="text-[10px] text-zinc-500">
+                {selectedNode.degree}{" "}
+                {selectedNode.degree === 1 ? "conexión" : "conexiones"}
+              </span>
+            </div>
+
+            <p className="mt-3 text-xs leading-5 text-zinc-400">
+              {getNoteExcerpt(selectedNode.note.content) ||
+                "Esta nota todavía no tiene contenido."}
+            </p>
+
+            <div className="mt-4">
+              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                Notas conectadas
+              </p>
+              {connectedNodes.length > 0 ? (
+                <ul className="max-h-28 space-y-1 overflow-y-auto">
+                  {connectedNodes.map((connectedNode) => {
+                    const area = areaBySlug.get(connectedNode.area);
+                    return (
+                      <li key={connectedNode.id}>
+                        <button
+                          type="button"
+                          onClick={() => focusNode(connectedNode.id)}
+                          className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                        >
+                          <span className="min-w-0 truncate">
+                            {connectedNode.title}
+                          </span>
+                          <span className="shrink-0 text-[10px] text-zinc-500">
+                            {area?.name ?? connectedNode.area}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="text-xs text-zinc-600">Sin conexiones.</p>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onSelectNote(selectedNode.note)}
+              className="mt-4 flex w-full items-center justify-center rounded-lg bg-emerald-400 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-300"
+            >
+              Abrir nota en editor
+            </button>
+          </aside>
+        ) : null}
+
+        <div className="absolute bottom-3 right-4 z-20 flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-950/90 p-1 shadow-xl">
+          <button
+            type="button"
+            aria-label="Alejar"
+            title="Alejar"
+            onClick={() => zoomBy(1.15)}
+            className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          >
+            <Minus className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Acercar"
+            title="Acercar"
+            onClick={() => zoomBy(0.87)}
+            className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          >
+            <Plus className="size-3.5" />
+          </button>
+          <span className="mx-0.5 h-4 w-px bg-zinc-800" />
+          <button
+            type="button"
+            onClick={resetView}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          >
+            <RotateCcw className="size-3.5" />
+            Centrar
+          </button>
+        </div>
+
         <div className="pointer-events-none absolute bottom-3 left-4 rounded-lg border border-zinc-800/80 bg-zinc-950/90 px-3 py-1.5 text-[11px] text-zinc-500">
-          Rueda para zoom · Arrastrá el fondo para mover el lienzo · Arrastrá nodos para moverlos · Clic para abrir · Usá{" "}
+          Rueda para zoom · Arrastrá el fondo para mover el lienzo · Arrastrá nodos para moverlos · Doble clic para abrir · Usá{" "}
           <span className="text-zinc-300">[[Título]]</span>
         </div>
       </div>
