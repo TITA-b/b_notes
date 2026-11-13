@@ -62,9 +62,8 @@ export function TaskBoard({ area }: TaskBoardProps) {
   const [syncingTaskId, setSyncingTaskId] = useState<string | null>(null);
 
   const loading = loadedArea !== area;
-
-  const loadCalendar = useCallback(async () => {
-    setGcalLoading(true);
+const loadCalendar = useCallback(async (withSpinner = true) => {
+    if (withSpinner) setGcalLoading(true);
     try {
       const res = await fetch("/api/google/events");
       const data = await res.json();
@@ -76,9 +75,23 @@ export function TaskBoard({ area }: TaskBoardProps) {
   }, []);
 
   useEffect(() => {
-    void loadCalendar();
-  }, [loadCalendar]);
+    let cancelled = false;
 
+    fetch("/api/google/events")
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        setGcalConnected(Boolean(data.connected));
+        setGcalEvents(data.events ?? []);
+      })
+      .finally(() => {
+        if (!cancelled) setGcalLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   useEffect(() => {
     let cancelled = false;
 
