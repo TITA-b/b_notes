@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CalendarCheck2,
   FileText,
@@ -16,6 +16,7 @@ import { NoteEditor } from "@/components/NoteEditor";
 import { TaskBoard } from "@/components/TaskBoard";
 import { KnowledgeGraph } from "@/components/KnowledgeGraph";
 import { AiAssistantDrawer } from "@/components/AiAssistantDrawer";
+import { GlobalSearchModal } from "@/components/GlobalSearchModal";
 import {
   createNote,
   deleteNote,
@@ -34,28 +35,65 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [activeTab, setActiveTab] = useState<"notes" | "tasks" | "graph">(
     "notes"
   );
-  const [notes, setNotes] = useState<Note[]>([]);
+  const [notesState, setNotesState] = useState<{
+    area: AreaId;
+    notes: Note[];
+    loading: boolean;
+    error: string | null;
+  }>({ area: "facultad", notes: [], loading: true, error: null });
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
   const [mobileEditing, setMobileEditing] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [tasksRefreshKey, setTasksRefreshKey] = useState(0);
+  const pendingNoteId = useRef<string | null>(null);
+  const notes =
+    notesState.area === activeArea ? notesState.notes : [];
+  const loading =
+    notesState.area !== activeArea || notesState.loading;
+  const notesError =
+    notesState.area === activeArea ? notesState.error : null;
+
+  const closeGlobalSearch = useCallback(() => {
+    setGlobalSearchOpen(false);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setSelectedNoteId(null);
-    setMobileEditing(false);
+    const noteToOpen = pendingNoteId.current;
+    pendingNoteId.current = null;
 
     getNotesByArea(activeArea)
       .then((data) => {
         if (cancelled) return;
-        setNotes(data);
-        if (data.length > 0) setSelectedNoteId(data[0].id);
+        setNotesState({
+          area: activeArea,
+          notes: data,
+          loading: false,
+          error: null,
+        });
+        const preferredNoteId = noteToOpen ?? pendingNoteId.current;
+        pendingNoteId.current = null;
+        const selected = preferredNoteId
+          ? data.find((note) => note.id === preferredNoteId)
+          : undefined;
+        setSelectedNoteId(selected?.id ?? data[0]?.id ?? null);
+        if (preferredNoteId && selected) setMobileEditing(true);
+        if (!preferredNoteId) setMobileEditing(false);
       })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setNotesState({
+          area: activeArea,
+          notes: [],
+          loading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "No se pudieron cargar las notas.",
+        });
+        setSelectedNoteId(null);
       });
 
     return () => {
@@ -63,9 +101,56 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     };
   }, [activeArea]);
 
+  useEffect(() => {
+    function handleGlobalShortcut(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        if (globalSearchOpen) closeGlobalSearch();
+        else setGlobalSearchOpen(true);
+      }
+    }
+
+    window.addEventListener("keydown", handleGlobalShortcut);
+    return () => window.removeEventListener("keydown", handleGlobalShortcut);
+  }, [closeGlobalSearch, globalSearchOpen]);
+
+  function handleSelectArea(area: AreaId) {
+    if (area === activeArea) return;
+    pendingNoteId.current = null;
+    setSelectedNoteId(null);
+    setMobileEditing(false);
+    setActiveArea(area);
+  }
+
+  function updateNotes(updater: (current: Note[]) => Note[]) {
+    setNotesState((current) =>
+      current.area === activeArea
+        ? { ...current, notes: updater(current.notes) }
+        : current
+    );
+  }
+
+  function handleSelectNote(note: Note) {
+    setActiveTab("notes");
+    if (note.area !== activeArea) {
+      pendingNoteId.current = note.id;
+      setActiveArea(note.area);
+      return;
+    }
+    if (notesState.area !== activeArea || notesState.loading) {
+      pendingNoteId.current = note.id;
+    }
+
+    updateNotes((current) =>
+      current.some((item) => item.id === note.id) ? current : [note, ...current]
+    );
+    setSelectedNoteId(note.id);
+    setMobileEditing(true);
+  }
+
   async function handleCreateNote() {
     const created = await createNote(activeArea);
-    setNotes((prev) => [created, ...prev]);
+    updateNotes((prev) => [created, ...prev]);
     setSelectedNoteId(created.id);
     setMobileEditing(true);
   }
@@ -75,7 +160,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     updates: { title?: string; content?: string }
   ): Promise<Note> {
     const updated = await updateNote(id, updates);
-    setNotes((prev) =>
+    updateNotes((prev) =>
       prev.map((item) => (item.id === id ? updated : item))
     );
     return updated;
@@ -83,7 +168,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   async function handleDeleteNote(id: string) {
     await deleteNote(id);
-    setNotes((prev) => {
+    updateNotes((prev) => {
       const remaining = prev.filter((n) => n.id !== id);
       if (selectedNoteId === id) {
         setSelectedNoteId(remaining[0]?.id ?? null);
@@ -95,16 +180,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   async function handleOpenWikilink(linkTitle: string) {
     const target = await findOrCreateNoteByTitle(linkTitle, activeArea);
-    setActiveTab("notes");
-    if (target.area !== activeArea) {
-      setActiveArea(target.area);
-    } else {
-      setNotes((prev) =>
-        prev.some((n) => n.id === target.id) ? prev : [target, ...prev]
-      );
-    }
-    setSelectedNoteId(target.id);
-    setMobileEditing(true);
+    handleSelectNote(target);
   }
 
   const filteredNotes = notes.filter(
@@ -117,7 +193,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   return (
     <div className="min-h-dvh bg-zinc-950 text-zinc-100 md:pl-72">
-      <Sidebar activeArea={activeArea} onSelectArea={setActiveArea} />
+      <Sidebar activeArea={activeArea} onSelectArea={handleSelectArea} />
 
       <div className="flex h-dvh flex-col pt-14 md:pt-0">
         {/* Barra superior de sub-módulos */}
@@ -164,6 +240,17 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           <div className="flex items-center gap-3">
             <button
               type="button"
+              onClick={() => setGlobalSearchOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white"
+            >
+              <Search className="size-3.5" />
+              <span className="hidden sm:inline">Buscar</span>
+              <kbd className="hidden rounded border border-zinc-700 px-1 py-0.5 text-[10px] text-zinc-500 sm:inline">
+                Ctrl+K
+              </kbd>
+            </button>
+            <button
+              type="button"
               onClick={() => setAiOpen(true)}
               className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white"
             >
@@ -181,12 +268,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           <div className="flex-1 overflow-hidden">
             <KnowledgeGraph
               activeArea={activeArea}
-              onSelectNote={(note) => {
-                setActiveArea(note.area);
-                setSelectedNoteId(note.id);
-                setActiveTab("notes");
-                setMobileEditing(true);
-              }}
+              onSelectNote={handleSelectNote}
             />
           </div>
         ) : activeTab === "tasks" ? (
@@ -232,6 +314,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                 {loading ? (
                   <p className="px-3 py-6 text-center text-xs text-zinc-500">
                     Cargando notas…
+                  </p>
+                ) : notesError ? (
+                  <p role="alert" className="px-3 py-6 text-center text-xs text-red-300">
+                    {notesError}
                   </p>
                 ) : filteredNotes.length === 0 ? (
                   <p className="px-3 py-8 text-center text-xs text-zinc-500">
@@ -294,6 +380,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             >
               {selectedNote ? (
                 <NoteEditor
+                  key={selectedNote.id}
                   note={selectedNote}
                   onSave={handleSaveNote}
                   onOpenWikilink={handleOpenWikilink}
@@ -328,7 +415,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
               (n) => n.area === activeArea
             );
             if (notesInArea.length > 0) {
-              setNotes((prev) => [...notesInArea, ...prev]);
+              updateNotes((prev) => [...notesInArea, ...prev]);
               setSelectedNoteId(notesInArea[0].id);
             }
           }
@@ -336,11 +423,18 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             setTasksRefreshKey((k) => k + 1);
           }
           if (updatedNote) {
-            setNotes((prev) =>
+            updateNotes((prev) =>
               prev.map((n) => (n.id === updatedNote.id ? updatedNote : n))
             );
           }
         }}
+      />
+
+      <GlobalSearchModal
+        key={globalSearchOpen ? "open" : "closed"}
+        open={globalSearchOpen}
+        onClose={closeGlobalSearch}
+        onSelectNote={handleSelectNote}
       />
     </div>
   );

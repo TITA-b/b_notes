@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       calendarId: "primary",
       requestBody: {
         summary: `[${String(area).toUpperCase()}] ${title}`,
-        description: "Sincronizado desde Cerebro Digital",
+        description: "Sincronizado desde B_Notes",
         start: { dateTime: startDate.toISOString() },
         end: { dateTime: endDate.toISOString() },
       },

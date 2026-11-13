@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -13,8 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cerebro digital",
-  description: "Núcleo del sistema personal",
+  title: "B_Notes",
+  description: "Sistema personal de notas, tareas, grafos y asistente IA",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#09090b",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

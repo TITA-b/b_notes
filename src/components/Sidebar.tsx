@@ -49,7 +49,7 @@ export function Sidebar({ activeArea, onSelectArea }: SidebarProps) {
             Núcleo
           </p>
           <p className="mt-1 text-sm font-medium text-zinc-100">
-            Cerebro digital
+            B_Notes
           </p>
         </div>
         <button
@@ -120,7 +120,7 @@ export function Sidebar({ activeArea, onSelectArea }: SidebarProps) {
   return (
     <>
       <header className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between border-b border-zinc-800 bg-zinc-950/95 px-4 backdrop-blur md:hidden">
-        <p className="text-sm font-medium">Cerebro digital</p>
+        <p className="text-sm font-medium">B_Notes</p>
         <button
           type="button"
           className="rounded-md p-2 text-zinc-300 hover:bg-zinc-900"

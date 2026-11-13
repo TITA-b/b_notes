@@ -8,14 +8,31 @@ interface ChatMessage {
 }
 
 interface AiAction {
-  type: "create_task" | "create_note" | "append_to_active_note";
+  type:
+    | "create_task"
+    | "create_note"
+    | "append_to_active_note"
+    | "create_calendar_event";
   area?: string;
   title?: string;
   content?: string;
   due_date?: string | null;
+  start_time?: string;
+  end_time?: string;
 }
 
 const VALID_AREAS = ["facultad", "weedo", "personal", "finanzas"];
+
+function addOneHour(dateTime: string): string {
+  const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(dateTime);
+  const parsed = new Date(hasTimezone ? dateTime : `${dateTime}Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("La fecha de inicio del evento no es válida.");
+  }
+
+  const endDate = new Date(parsed.getTime() + 60 * 60 * 1000).toISOString();
+  return hasTimezone ? endDate : endDate.slice(0, -1);
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -242,6 +259,38 @@ export async function POST(request: NextRequest) {
             executedActions.push("Contenido agregado a la nota abierta");
           }
         }
+      } else if (
+        action.type === "create_calendar_event" &&
+        action.title &&
+        action.start_time
+      ) {
+        const calendar = await getAuthenticatedCalendar();
+        if (!calendar) {
+          executedActions.push(
+            `Evento no creado: Google Calendar no conectado ("${action.title}")`
+          );
+          continue;
+        }
+
+        const endTime = action.end_time ?? addOneHour(action.start_time);
+        const createdEvent = await calendar.events.insert({
+          calendarId: "primary",
+          requestBody: {
+            summary: action.title.trim(),
+            start: {
+              dateTime: action.start_time,
+              timeZone: "America/Argentina/Buenos_Aires",
+            },
+            end: {
+              dateTime: endTime,
+              timeZone: "America/Argentina/Buenos_Aires",
+            },
+          },
+        });
+
+        executedActions.push(
+          `Evento creado: "${action.title}" (${createdEvent.data.id ?? "Google Calendar"})`
+        );
       }
     }
 

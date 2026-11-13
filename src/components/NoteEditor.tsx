@@ -17,6 +17,7 @@ import {
   List,
   Loader2,
 } from "lucide-react";
+import { getAllNotes } from "@/services/notesService";
 import type { Note } from "@/types/note";
 
 interface NoteEditorProps {
@@ -46,9 +47,69 @@ export function NoteEditor({
 }: NoteEditorProps) {
   const [title, setTitle] = useState(note.title);
   const [liveLinks, setLiveLinks] = useState<string[]>(note.links ?? []);
+  const [backlinksState, setBacklinksState] = useState<{
+    noteId: string;
+    title: string;
+    notes: Note[];
+  } | null>(null);
+  const [backlinksErrorState, setBacklinksErrorState] = useState<{
+    noteId: string;
+    title: string;
+    message: string;
+  } | null>(null);
   const [status, setStatus] = useState<"saved" | "saving">("saved");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNoteId = useRef(note.id);
+
+  useEffect(() => {
+    let cancelled = false;
+    const trimmedTitle = note.title.trim();
+
+    if (!trimmedTitle) return;
+
+    const wikilink = `[[${trimmedTitle}]]`.toLocaleLowerCase();
+    getAllNotes()
+      .then((allNotes) => {
+        if (cancelled) return;
+        setBacklinksState({
+          noteId: note.id,
+          title: trimmedTitle,
+          notes: allNotes.filter(
+            (item) =>
+              item.id !== note.id &&
+              item.content.toLocaleLowerCase().includes(wikilink)
+          ),
+        });
+        setBacklinksErrorState(null);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setBacklinksErrorState({
+            noteId: note.id,
+            title: trimmedTitle,
+            message:
+              error instanceof Error
+                ? error.message
+                : "No se pudieron cargar las menciones.",
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [note.id, note.title]);
+
+  const backlinks =
+    backlinksState?.noteId === note.id &&
+    backlinksState.title === note.title.trim()
+      ? backlinksState.notes
+      : [];
+  const backlinksError =
+    backlinksErrorState?.noteId === note.id &&
+    backlinksErrorState.title === note.title.trim()
+      ? backlinksErrorState.message
+      : null;
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -94,9 +155,6 @@ TaskItem.configure({
 
   useEffect(() => {
     latestNoteId.current = note.id;
-    setTitle(note.title);
-    setLiveLinks(note.links ?? []);
-    setStatus("saved");
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
     if (editor && !editor.isDestroyed) {
@@ -108,7 +166,7 @@ TaskItem.configure({
         editor.commands.setContent(note.content || "");
       }
     }
-  }, [note.id]);
+  }, [editor, note.id, note.content]);
 
   function scheduleSave(updates: { title?: string; content?: string }) {
     setStatus("saving");
@@ -215,6 +273,34 @@ TaskItem.configure({
           <EditorContent editor={editor} />
         </div>
       </div>
+
+      {backlinks.length > 0 ? (
+        <div className="border-t border-zinc-800/80 bg-zinc-900/40 px-5 py-3 md:px-10">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mr-1 text-xs font-medium text-zinc-400">
+              Mencionada en ({backlinks.length})
+            </span>
+            {backlinks.map((backlink) => (
+              <button
+                key={backlink.id}
+                type="button"
+                onClick={() => onOpenWikilink(backlink.title)}
+                className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
+              >
+                <span>{backlink.title || "Sin título"}</span>
+                <span className="capitalize text-zinc-500">
+                  {backlink.area}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {backlinksError ? (
+        <p role="alert" className="border-t border-zinc-800/80 px-5 py-2 text-xs text-red-300 md:px-10">
+          {backlinksError}
+        </p>
+      ) : null}
 
       {liveLinks.length > 0 ? (
         <div className="border-t border-zinc-800/80 bg-zinc-900/40 px-5 py-3 md:px-10">

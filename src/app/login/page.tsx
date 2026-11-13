@@ -65,7 +65,7 @@ export default function LoginPage() {
     <main className="flex min-h-dvh items-center justify-center bg-zinc-950 px-6 text-zinc-100">
       <section className="w-full max-w-sm">
         <p className="text-xs tracking-[0.22em] text-zinc-500 uppercase">
-          Cerebro digital
+          B_Notes
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight">
           Iniciar sesión
