@@ -50,9 +50,9 @@ function isOverdue(iso: string | null, completed: boolean) {
 
 export function TaskBoard({ area }: TaskBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [loadedArea, setLoadedArea] = useState<AreaId | null>(null);
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState("");
-  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   // Estado de Google Calendar
@@ -60,6 +60,8 @@ export function TaskBoard({ area }: TaskBoardProps) {
   const [gcalEvents, setGcalEvents] = useState<GCalEvent[]>([]);
   const [gcalLoading, setGcalLoading] = useState(true);
   const [syncingTaskId, setSyncingTaskId] = useState<string | null>(null);
+
+  const loading = loadedArea !== area;
 
   const loadCalendar = useCallback(async () => {
     setGcalLoading(true);
@@ -74,19 +76,18 @@ export function TaskBoard({ area }: TaskBoardProps) {
   }, []);
 
   useEffect(() => {
-    loadCalendar();
+    void loadCalendar();
   }, [loadCalendar]);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
 
     getTasksByArea(area)
       .then((data) => {
         if (!cancelled) setTasks(data);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setLoadedArea(area);
       });
 
     return () => {

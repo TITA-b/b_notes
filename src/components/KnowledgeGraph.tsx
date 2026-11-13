@@ -28,11 +28,11 @@ interface GraphEdge {
 }
 
 const AREA_COLORS: Record<string, string> = {
-  facultad: "#38bdf8", // sky-400
-  trabajo: "#a855f7",  // purple-500
-  weedo: "#a855f7",    // purple-500
-  personal: "#34d399", // emerald-400
-  finanzas: "#fbbf24", // amber-400
+  facultad: "#38bdf8",
+  trabajo: "#a855f7",
+  weedo: "#a855f7",
+  personal: "#34d399",
+  finanzas: "#fbbf24",
 };
 
 const PALETTE_FALLBACK = ["#38bdf8", "#a855f7", "#34d399", "#fbbf24", "#f472b6"];
@@ -63,16 +63,24 @@ export function KnowledgeGraph({
   const [scope, setScope] = useState<"all" | "area">("all");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [, setTick] = useState(0);
+  const [renderedNodes, setRenderedNodes] = useState<GraphNode[]>([]);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const nodesRef = useRef<GraphNode[]>([]);
+  const simNodesRef = useRef<GraphNode[]>([]);
 
   useEffect(() => {
-    setLoading(true);
+    let cancelled = false;
     getAllNotes()
-      .then((data) => setAllNotes(data))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (!cancelled) setAllNotes(data);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const filteredNotes = useMemo(() => {
@@ -85,7 +93,7 @@ export function KnowledgeGraph({
     return Array.from(new Set(allNotes.map((n) => n.area)));
   }, [allNotes]);
 
-  const { edges } = useMemo(() => {
+  const { initialNodes, edges } = useMemo(() => {
     const byTitle = new Map<string, Note>();
     filteredNotes.forEach((n) => {
       byTitle.set(n.title.trim().toLowerCase(), n);
@@ -111,7 +119,7 @@ export function KnowledgeGraph({
 
     const width = 900;
     const height = 600;
-    nodesRef.current = filteredNotes.map((note, idx) => {
+    const nodes: GraphNode[] = filteredNotes.map((note, idx) => {
       const angle = (idx / Math.max(filteredNotes.length, 1)) * Math.PI * 2;
       const radius = 140 + (idx % 3) * 45;
       return {
@@ -127,17 +135,21 @@ export function KnowledgeGraph({
       };
     });
 
-    return { edges: computedEdges };
+    return { initialNodes: nodes, edges: computedEdges };
   }, [filteredNotes]);
 
   useEffect(() => {
+    simNodesRef.current = initialNodes.map((n) => ({ ...n }));
     let animId: number;
     const width = 900;
     const height = 600;
 
     function step() {
-      const nodes = nodesRef.current;
-      if (nodes.length === 0) return;
+      const nodes = simNodesRef.current;
+      if (nodes.length === 0) {
+        setRenderedNodes([]);
+        return;
+      }
 
       const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
@@ -188,13 +200,13 @@ export function KnowledgeGraph({
         n.y = Math.max(50, Math.min(height - 50, n.y + n.vy));
       }
 
-      setTick((t) => (t + 1) % 10000);
+      setRenderedNodes(nodes.map((n) => ({ ...n })));
       animId = requestAnimationFrame(step);
     }
 
     animId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(animId);
-  }, [edges, draggingId]);
+  }, [initialNodes, edges, draggingId]);
 
   const connectedToHovered = useMemo(() => {
     if (!hoveredId) return new Set<string>();
@@ -214,7 +226,7 @@ export function KnowledgeGraph({
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
 
-    const node = nodesRef.current.find((n) => n.id === draggingId);
+    const node = simNodesRef.current.find((n) => n.id === draggingId);
     if (node) {
       node.x = Math.max(40, Math.min(860, x));
       node.y = Math.max(40, Math.min(560, y));
@@ -223,12 +235,13 @@ export function KnowledgeGraph({
     }
   }
 
-  const nodes = nodesRef.current;
-  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const nodeById = useMemo(
+    () => new Map(renderedNodes.map((n) => [n.id, n])),
+    [renderedNodes]
+  );
 
   return (
     <div className="flex h-full flex-col bg-zinc-950">
-      {/* Barra superior del grafo */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 px-5 py-3">
         <div className="flex items-center gap-2.5">
           <Network className="size-4 text-emerald-400" />
@@ -236,12 +249,11 @@ export function KnowledgeGraph({
             Mapa de Conocimiento
           </h2>
           <span className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[11px] text-zinc-400">
-            {nodes.length} notas · {edges.length} conexiones
+            {renderedNodes.length} notas · {edges.length} conexiones
           </span>
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Leyenda dinámica de áreas */}
           <div className="hidden items-center gap-3 sm:flex">
             {distinctAreas.map((areaKey, idx) => (
               <span
@@ -257,7 +269,6 @@ export function KnowledgeGraph({
             ))}
           </div>
 
-          {/* Selector Todas vs Área actual */}
           <div className="flex rounded-lg border border-zinc-800 bg-zinc-900 p-0.5 text-xs">
             <button
               type="button"
@@ -285,13 +296,12 @@ export function KnowledgeGraph({
         </div>
       </div>
 
-      {/* Lienzo interactivo */}
       <div className="relative flex-1 overflow-hidden">
         {loading ? (
           <div className="flex h-full items-center justify-center text-xs text-zinc-500">
             Construyendo red de nodos…
           </div>
-        ) : nodes.length === 0 ? (
+        ) : renderedNodes.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center p-6 text-center">
             <Sparkles className="size-7 text-zinc-700" />
             <p className="mt-2 text-sm text-zinc-300">
@@ -311,7 +321,6 @@ export function KnowledgeGraph({
             onPointerLeave={() => setDraggingId(null)}
             className="h-full w-full cursor-grab active:cursor-grabbing select-none"
           >
-            {/* Aristas / Conexiones */}
             {edges.map((edge, idx) => {
               const s = nodeById.get(edge.source);
               const t = nodeById.get(edge.target);
@@ -336,8 +345,7 @@ export function KnowledgeGraph({
               );
             })}
 
-            {/* Nodos */}
-            {nodes.map((node, idx) => {
+            {renderedNodes.map((node, idx) => {
               const radius = 6 + Math.min(node.degree * 2.5, 10);
               const isHovered = hoveredId === node.id;
               const isConnected = connectedToHovered.has(node.id);
