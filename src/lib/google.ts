@@ -14,7 +14,7 @@ export function getOAuthClient() {
   return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 }
 
-export async function getAuthenticatedCalendar() {
+async function getAuthenticatedOAuthClient() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -50,5 +50,19 @@ export async function getAuthenticatedCalendar() {
       .eq("user_id", user.id);
   });
 
-  return google.calendar({ version: "v3", auth: oauth2Client });
+  return oauth2Client;
+}
+
+export async function getAuthenticatedCalendar() {
+  const oauth2Client = await getAuthenticatedOAuthClient();
+  return oauth2Client
+    ? google.calendar({ version: "v3", auth: oauth2Client })
+    : null;
+}
+
+export async function getAuthenticatedDrive() {
+  const oauth2Client = await getAuthenticatedOAuthClient();
+  return oauth2Client
+    ? google.drive({ version: "v3", auth: oauth2Client })
+    : null;
 }

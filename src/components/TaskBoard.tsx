@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element -- media previews are served by the authenticated Drive proxy. */
+
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
   Calendar,
@@ -8,18 +10,31 @@ import {
   CheckCircle2,
   Circle,
   ExternalLink,
+  Paperclip,
+  Play,
   Plus,
   RefreshCw,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   createTask,
   deleteTask,
   getTasksByArea,
   toggleTaskCompleted,
+  updateTaskAttachments,
 } from "@/services/tasksService";
 import type { AreaId } from "@/types/note";
-import type { Task } from "@/types/task";
+import type { Task, TaskAttachment } from "@/types/task";
+import {
+  getDriveImagePreviewUrl,
+  getDriveVideoEmbedUrl,
+  getDriveViewUrl,
+} from "@/lib/driveMedia";
+import {
+  MediaLightboxModal,
+  type LightboxMedia,
+} from "@/components/MediaLightboxModal";
 
 interface TaskBoardProps {
   area: AreaId;
@@ -33,6 +48,129 @@ interface GCalEvent {
   htmlLink: string;
 }
 
+interface DriveApiResponse {
+  error?: string;
+  requiresReauth?: boolean;
+  file?: {
+    id: string;
+    name: string;
+    mimeType: string;
+    webViewLink: string;
+  };
+}
+
+function getAttachmentMedia(attachment: TaskAttachment): LightboxMedia | null {
+  if (attachment.mimeType.startsWith("image/")) {
+    return {
+      type: "image",
+      src: attachment.url,
+      title: attachment.name,
+      driveUrl: getDriveViewUrl(attachment.url),
+    };
+  }
+  if (attachment.mimeType.startsWith("video/")) {
+    return {
+      type: "video",
+      src: getDriveVideoEmbedUrl(attachment.id),
+      title: attachment.name,
+      driveUrl: getDriveViewUrl(attachment.url),
+    };
+  }
+  return null;
+}
+
+function AttachmentChips({
+  attachments,
+  onRemove,
+  onPreview,
+  disabled,
+}: {
+  attachments: TaskAttachment[];
+  onRemove: (attachment: TaskAttachment) => void;
+  onPreview: (attachment: TaskAttachment) => void;
+  disabled: boolean;
+}) {
+  if (attachments.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {attachments.map((attachment) => {
+        const media = getAttachmentMedia(attachment);
+        return (
+          <span
+            key={attachment.id}
+            className="inline-flex max-w-full items-center gap-1 rounded-md border border-zinc-800 bg-zinc-950 px-1.5 py-1 text-[11px] text-zinc-300"
+          >
+            {media ? (
+              <button
+                type="button"
+                aria-label={`Ver ${attachment.name}`}
+                onClick={() => onPreview(attachment)}
+                className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-zinc-800"
+              >
+                {media.type === "image" ? (
+                  <img
+                    src={getDriveImagePreviewUrl(attachment.id)}
+                    alt=""
+                    loading="lazy"
+                    className="size-10 rounded-md object-cover"
+                  />
+                ) : (
+                  <span className="flex size-10 items-center justify-center bg-zinc-800 text-zinc-200">
+                    <Play className="size-4 fill-current" />
+                  </span>
+                )}
+              </button>
+            ) : (
+              <Paperclip className="ml-1 size-3 shrink-0 text-zinc-500" />
+            )}
+            {media ? (
+              <button
+                type="button"
+                onClick={() => onPreview(attachment)}
+                title={attachment.name}
+                className="max-w-48 truncate text-left hover:text-white"
+              >
+                {attachment.name}
+              </button>
+            ) : (
+              <a
+                href={getDriveViewUrl(attachment.url)}
+                target="_blank"
+                rel="noreferrer"
+                title={attachment.name}
+                className="max-w-48 truncate hover:text-white"
+              >
+                {attachment.name}
+              </a>
+            )}
+            <a
+              href={getDriveViewUrl(attachment.url)}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Abrir ${attachment.name} en Google Drive`}
+              title="Abrir en Drive"
+              className="shrink-0 rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <ExternalLink className="size-3" />
+            </a>
+            <button
+              type="button"
+              aria-label={`Quitar ${attachment.name}`}
+              title="Quitar archivo"
+              disabled={disabled}
+              onClick={() => onRemove(attachment)}
+              className="shrink-0 rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-red-300 disabled:opacity-50"
+            >
+              <X className="size-3" />
+            </button>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function formatDueDate(iso: string | null) {
   if (!iso) return null;
   const date = new Date(iso);
@@ -44,9 +182,13 @@ function formatDueDate(iso: string | null) {
   }).format(date);
 }
 
-function isOverdue(iso: string | null, completed: boolean) {
-  if (!iso || completed) return false;
-  return new Date(iso).getTime() < Date.now();
+function isOverdue(
+  iso: string | null,
+  completed: boolean,
+  currentTime: number | null
+) {
+  if (!iso || completed || currentTime === null) return false;
+  return new Date(iso).getTime() < currentTime;
 }
 
 export function TaskBoard({ area, areaName }: TaskBoardProps) {
@@ -55,6 +197,28 @@ export function TaskBoard({ area, areaName }: TaskBoardProps) {
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [draftAttachments, setDraftAttachments] = useState<TaskAttachment[]>([]);
+  const [uploadingTarget, setUploadingTarget] = useState<string | null>(null);
+  const [deletingAttachmentId, setDeletingAttachmentId] = useState<string | null>(null);
+  const [driveError, setDriveError] = useState<string | null>(null);
+  const [driveNeedsReconnect, setDriveNeedsReconnect] = useState(false);
+  const [activeMedia, setActiveMedia] = useState<LightboxMedia | null>(null);
+  const [currentTime, setCurrentTime] = useState<number | null>(null);
+
+  useEffect(() => {
+    const updateCurrentTime = () => setCurrentTime(Date.now());
+    const initialUpdate = window.setTimeout(updateCurrentTime, 0);
+    const interval = window.setInterval(updateCurrentTime, 60_000);
+    return () => {
+      window.clearTimeout(initialUpdate);
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  function handlePreviewAttachment(attachment: TaskAttachment) {
+    const media = getAttachmentMedia(attachment);
+    if (media) setActiveMedia(media);
+  }
 
   // Estado de Google Calendar
   const [gcalConnected, setGcalConnected] = useState(false);
@@ -111,16 +275,156 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
-    if (!title.trim() || submitting) return;
+    if (!title.trim() || submitting || uploadingTarget === "draft") return;
 
     setSubmitting(true);
     try {
-      const created = await createTask(area, title, dueDate || null);
+      const created = await createTask(
+        area,
+        title,
+        dueDate || null,
+        draftAttachments
+      );
       setTasks((prev) => [created, ...prev]);
       setTitle("");
       setDueDate("");
+      setDraftAttachments([]);
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function uploadFileToDrive(file: File): Promise<TaskAttachment> {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/api/google/drive", {
+      method: "POST",
+      body: formData,
+    });
+    const data = (await response.json()) as DriveApiResponse;
+    if (!response.ok || !data.file) {
+      const requiresReauth =
+        response.status === 401 || Boolean(data.requiresReauth);
+      setDriveNeedsReconnect(requiresReauth);
+      throw new Error(data.error ?? "No se pudo subir el archivo a Google Drive.");
+    }
+
+    return {
+      id: data.file.id,
+      name: data.file.name,
+      mimeType: data.file.mimeType,
+      url: data.file.webViewLink,
+    };
+  }
+
+  async function deleteDriveFile(fileId: string) {
+    const response = await fetch(
+      `/api/google/drive?fileId=${encodeURIComponent(fileId)}`,
+      { method: "DELETE" }
+    );
+    const data = (await response.json()) as DriveApiResponse;
+    if (!response.ok) {
+      const requiresReauth =
+        response.status === 401 || Boolean(data.requiresReauth);
+      setDriveNeedsReconnect(requiresReauth);
+      throw new Error(data.error ?? "No se pudo eliminar el archivo de Drive.");
+    }
+  }
+
+  async function handleDraftUpload(files: File[]) {
+    if (files.length === 0 || uploadingTarget) return;
+    setUploadingTarget("draft");
+    setDriveError(null);
+    setDriveNeedsReconnect(false);
+    try {
+      for (const file of files) {
+        const attachment = await uploadFileToDrive(file);
+        setDraftAttachments((current) => [...current, attachment]);
+      }
+    } catch (error: unknown) {
+      setDriveError(
+        error instanceof Error ? error.message : "No se pudieron subir los archivos."
+      );
+    } finally {
+      setUploadingTarget(null);
+    }
+  }
+
+  async function handleTaskUpload(task: Task, files: File[]) {
+    if (files.length === 0 || uploadingTarget) return;
+    setUploadingTarget(task.id);
+    setDriveError(null);
+    setDriveNeedsReconnect(false);
+    let attachments = [...(task.attachments ?? [])];
+
+    try {
+      for (const file of files) {
+        const attachment = await uploadFileToDrive(file);
+        const updatedAttachments = [...attachments, attachment];
+        try {
+          await updateTaskAttachments(task.id, updatedAttachments);
+        } catch (error: unknown) {
+          await deleteDriveFile(attachment.id);
+          throw error;
+        }
+        attachments = updatedAttachments;
+        setTasks((current) =>
+          current.map((item) =>
+            item.id === task.id ? { ...item, attachments } : item
+          )
+        );
+      }
+    } catch (error: unknown) {
+      setDriveError(
+        error instanceof Error ? error.message : "No se pudieron subir los archivos."
+      );
+    } finally {
+      setUploadingTarget(null);
+    }
+  }
+
+  async function handleRemoveDraftAttachment(attachment: TaskAttachment) {
+    setDeletingAttachmentId(attachment.id);
+    setDriveError(null);
+    setDriveNeedsReconnect(false);
+    try {
+      await deleteDriveFile(attachment.id);
+      setDraftAttachments((current) =>
+        current.filter((item) => item.id !== attachment.id)
+      );
+    } catch (error: unknown) {
+      setDriveError(
+        error instanceof Error ? error.message : "No se pudo quitar el archivo."
+      );
+    } finally {
+      setDeletingAttachmentId(null);
+    }
+  }
+
+  async function handleRemoveTaskAttachment(
+    task: Task,
+    attachment: TaskAttachment
+  ) {
+    setDeletingAttachmentId(attachment.id);
+    setDriveError(null);
+    setDriveNeedsReconnect(false);
+    try {
+      await deleteDriveFile(attachment.id);
+      const attachments = (task.attachments ?? []).filter(
+        (item) => item.id !== attachment.id
+      );
+      await updateTaskAttachments(task.id, attachments);
+      setTasks((current) =>
+        current.map((item) =>
+          item.id === task.id ? { ...item, attachments } : item
+        )
+      );
+    } catch (error: unknown) {
+      setDriveError(
+        error instanceof Error ? error.message : "No se pudo quitar el archivo."
+      );
+    } finally {
+      setDeletingAttachmentId(null);
     }
   }
 
@@ -133,6 +437,20 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
   }
 
   async function handleDelete(task: Task) {
+    if (task.attachments?.length) {
+      try {
+        await Promise.all(
+          task.attachments.map((attachment) => deleteDriveFile(attachment.id))
+        );
+      } catch (error: unknown) {
+        setDriveError(
+          error instanceof Error
+            ? error.message
+            : "No se pudieron eliminar los adjuntos de Drive."
+        );
+        return;
+      }
+    }
     setTasks((prev) => prev.filter((t) => t.id !== task.id));
 
     if (task.gcal_event_id) {
@@ -196,36 +514,89 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
           </p>
         </div>
 
+        {driveError ? (
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-amber-900/70 bg-amber-950/30 px-3 py-2 text-xs text-amber-200"
+          >
+            <p>{driveError}</p>
+            {driveNeedsReconnect ? (
+              <a
+                href="/api/google/auth"
+                className="mt-1 inline-block font-medium text-amber-100 underline underline-offset-2"
+              >
+                Reconectar Google Drive
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+
         <form
           onSubmit={handleAdd}
-          className="mt-5 flex flex-col gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3 sm:flex-row sm:items-center"
+          className="mt-5 flex flex-col gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3"
         >
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Nueva entrega, parcial o pendiente…"
-            className="h-9 flex-1 bg-transparent px-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none"
-          />
-
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
-              type="datetime-local"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="h-9 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 text-xs text-zinc-300 outline-none focus:border-zinc-600 [color-scheme:dark]"
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Nueva entrega, parcial o pendiente…"
+              className="h-9 flex-1 bg-transparent px-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none"
             />
+            <div className="flex items-center gap-2">
+              <input
+                type="datetime-local"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="h-9 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 text-xs text-zinc-300 outline-none focus:border-zinc-600 [color-scheme:dark]"
+              />
 
-            <button
-              type="submit"
-              disabled={!title.trim() || submitting}
-              className="flex h-9 items-center gap-1.5 rounded-lg bg-zinc-100 px-3.5 text-xs font-medium text-zinc-950 transition hover:bg-white disabled:opacity-50"
-            >
-              <Plus className="size-3.5" />
-              Agregar
-            </button>
+              <label
+                title="Adjuntar archivos a la nueva tarea"
+                className={`flex h-9 cursor-pointer items-center justify-center rounded-lg border border-zinc-800 px-2.5 text-zinc-300 transition hover:border-zinc-600 hover:text-white ${
+                  uploadingTarget === "draft" ? "opacity-50" : ""
+                }`}
+              >
+                <Paperclip className="size-4" />
+                <input
+                  type="file"
+                  multiple
+                  aria-label="Adjuntar archivos a la nueva tarea"
+                  disabled={uploadingTarget !== null}
+                  className="sr-only"
+                  onChange={(event) => {
+                    const files = Array.from(event.currentTarget.files ?? []);
+                    event.currentTarget.value = "";
+                    void handleDraftUpload(files);
+                  }}
+                />
+              </label>
+
+              <button
+                type="submit"
+                disabled={
+                  !title.trim() || submitting || uploadingTarget === "draft"
+                }
+                className="flex h-9 items-center gap-1.5 rounded-lg bg-zinc-100 px-3.5 text-xs font-medium text-zinc-950 transition hover:bg-white disabled:opacity-50"
+              >
+                <Plus className="size-3.5" />
+                Agregar
+              </button>
+            </div>
           </div>
+          {uploadingTarget === "draft" ? (
+            <p className="px-2 text-[11px] text-zinc-500">Subiendo adjunto…</p>
+          ) : null}
         </form>
+
+        <div className="mt-2">
+          <AttachmentChips
+            attachments={draftAttachments}
+            onRemove={handleRemoveDraftAttachment}
+            onPreview={handlePreviewAttachment}
+            disabled={uploadingTarget !== null || deletingAttachmentId !== null}
+          />
+        </div>
 
         <div className="mt-6 space-y-6">
           {loading ? (
@@ -241,68 +612,114 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
             <>
               <ul className="space-y-2">
                 {pendingTasks.map((task) => {
-                  const overdue = isOverdue(task.due_date, task.completed);
+                  const overdue = isOverdue(
+                    task.due_date,
+                    task.completed,
+                    currentTime
+                  );
                   const formatted = formatDueDate(task.due_date);
                   return (
                     <li
                       key={task.id}
-                      className="group flex items-center justify-between gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/40 px-4 py-3 transition hover:border-zinc-700"
+                      className="group rounded-xl border border-zinc-800/90 bg-zinc-900/40 px-4 py-3 transition hover:border-zinc-700"
                     >
-                      <button
-                        type="button"
-                        onClick={() => handleToggle(task)}
-                        className="flex flex-1 items-center gap-3 text-left"
-                      >
-                        <Circle className="size-4 shrink-0 text-zinc-500 transition hover:text-emerald-400" />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm text-zinc-100">{task.title}</p>
-                          {formatted ? (
-                            <p
-                              className={`mt-1 flex items-center gap-1 text-xs ${
-                                overdue ? "text-red-400" : "text-zinc-500"
-                              }`}
-                            >
-                              <Calendar className="size-3" />
-                              {formatted} {overdue ? "(Vencida)" : ""}
-                            </p>
-                          ) : null}
-                        </div>
-                      </button>
-
-                      <div className="flex items-center gap-1">
-                        {gcalConnected ? (
-                          task.sync_to_gcal ? (
-                            <span
-                              title="Sincronizada en Google Calendar"
-                              className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-400"
-                            >
-                              <Check className="size-3" />
-                              En Calendar
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              disabled={syncingTaskId === task.id}
-                              onClick={() => handleSyncToGCal(task)}
-                              title="Enviar a Google Calendar"
-                              className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-white disabled:opacity-50"
-                            >
-                              <CalendarPlus className="size-3" />
-                              {syncingTaskId === task.id
-                                ? "Subiendo…"
-                                : "Agendar"}
-                            </button>
-                          )
-                        ) : null}
-
+                      <div className="flex items-center justify-between gap-3">
                         <button
                           type="button"
-                          aria-label="Eliminar tarea"
-                          onClick={() => handleDelete(task)}
-                          className="rounded p-1.5 text-zinc-600 opacity-0 transition hover:bg-zinc-800 hover:text-red-300 group-hover:opacity-100"
+                          onClick={() => handleToggle(task)}
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
                         >
-                          <Trash2 className="size-3.5" />
+                          <Circle className="size-4 shrink-0 text-zinc-500 transition hover:text-emerald-400" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm text-zinc-100">{task.title}</p>
+                            {formatted ? (
+                              <p
+                                className={`mt-1 flex items-center gap-1 text-xs ${
+                                  overdue ? "text-red-400" : "text-zinc-500"
+                                }`}
+                              >
+                                <Calendar className="size-3" />
+                                {formatted} {overdue ? "(Vencida)" : ""}
+                              </p>
+                            ) : null}
+                          </div>
                         </button>
+
+                        <div className="flex shrink-0 items-center gap-1">
+                          {gcalConnected ? (
+                            task.sync_to_gcal ? (
+                              <span
+                                title="Sincronizada en Google Calendar"
+                                className="flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-400"
+                              >
+                                <Check className="size-3" />
+                                En Calendar
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={syncingTaskId === task.id}
+                                onClick={() => handleSyncToGCal(task)}
+                                title="Enviar a Google Calendar"
+                                className="flex items-center gap-1 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-white disabled:opacity-50"
+                              >
+                                <CalendarPlus className="size-3" />
+                                {syncingTaskId === task.id
+                                  ? "Subiendo…"
+                                  : "Agendar"}
+                              </button>
+                            )
+                          ) : null}
+
+                          <label
+                            title={
+                              uploadingTarget === task.id
+                                ? "Subiendo adjunto…"
+                                : "Adjuntar archivos a esta tarea"
+                            }
+                            className={`cursor-pointer rounded p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 ${
+                              uploadingTarget === task.id ? "animate-pulse" : ""
+                            }`}
+                          >
+                            <Paperclip className="size-3.5" />
+                            <input
+                              type="file"
+                              multiple
+                              aria-label={`Adjuntar archivos a ${task.title}`}
+                              disabled={uploadingTarget !== null}
+                              className="sr-only"
+                              onChange={(event) => {
+                                const files = Array.from(
+                                  event.currentTarget.files ?? []
+                                );
+                                event.currentTarget.value = "";
+                                void handleTaskUpload(task, files);
+                              }}
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            aria-label="Eliminar tarea"
+                            onClick={() => handleDelete(task)}
+                            className="rounded p-1.5 text-zinc-600 opacity-0 transition hover:bg-zinc-800 hover:text-red-300 group-hover:opacity-100"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="mt-2 pl-7">
+                        <AttachmentChips
+                          attachments={task.attachments ?? []}
+                          onRemove={(attachment) =>
+                            void handleRemoveTaskAttachment(task, attachment)
+                          }
+                          onPreview={handlePreviewAttachment}
+                          disabled={
+                            uploadingTarget !== null ||
+                            deletingAttachmentId !== null
+                          }
+                        />
                       </div>
                     </li>
                   );
@@ -318,26 +735,41 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                     {completedTasks.map((task) => (
                       <li
                         key={task.id}
-                        className="group flex items-center justify-between gap-3 rounded-lg px-3 py-2 text-zinc-500 hover:bg-zinc-900/30"
+                        className="group rounded-lg px-3 py-2 text-zinc-500 hover:bg-zinc-900/30"
                       >
-                        <button
-                          type="button"
-                          onClick={() => handleToggle(task)}
-                          className="flex flex-1 items-center gap-3 text-left"
-                        >
-                          <CheckCircle2 className="size-4 shrink-0 text-emerald-500/80" />
-                          <span className="text-sm line-through">
-                            {task.title}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="Eliminar tarea"
-                          onClick={() => handleDelete(task)}
-                          className="rounded p-1 text-zinc-600 opacity-0 transition hover:text-red-300 group-hover:opacity-100"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
+                        <div className="flex items-center justify-between gap-3">
+                          <button
+                            type="button"
+                            onClick={() => handleToggle(task)}
+                            className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          >
+                            <CheckCircle2 className="size-4 shrink-0 text-emerald-500/80" />
+                            <span className="truncate text-sm line-through">
+                              {task.title}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Eliminar tarea"
+                            onClick={() => handleDelete(task)}
+                            className="rounded p-1 text-zinc-600 opacity-0 transition hover:text-red-300 group-hover:opacity-100"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                        <div className="mt-2 pl-7">
+                          <AttachmentChips
+                            attachments={task.attachments ?? []}
+                            onRemove={(attachment) =>
+                              void handleRemoveTaskAttachment(task, attachment)
+                            }
+                            onPreview={handlePreviewAttachment}
+                            disabled={
+                              uploadingTarget !== null ||
+                              deletingAttachmentId !== null
+                            }
+                          />
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -425,6 +857,10 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
           )}
         </div>
       </aside>
+      <MediaLightboxModal
+        media={activeMedia}
+        onClose={() => setActiveMedia(null)}
+      />
     </div>
   );
 }

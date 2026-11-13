@@ -29,10 +29,11 @@ interface GraphEdge {
 }
 
 function extractWikiLinks(content: string): string[] {
+  const unescaped = content.replace(/\\\[/g, "[").replace(/\\\]/g, "]");
   const regex = /\[\[([^\]]+)\]\]/g;
   const matches: string[] = [];
   let match: RegExpExecArray | null;
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(unescaped)) !== null) {
     matches.push(match[1].trim().toLowerCase());
   }
   return matches;
@@ -49,10 +50,27 @@ export function KnowledgeGraph({
   const [scope, setScope] = useState<"all" | "area">("all");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [panning, setPanning] = useState(false);
+  const [viewBox, setViewBox] = useState({
+    x: 0,
+    y: 0,
+    width: 900,
+    height: 600,
+  });
   const [renderedNodes, setRenderedNodes] = useState<GraphNode[]>([]);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const simNodesRef = useRef<GraphNode[]>([]);
+  const panStartRef = useRef<{
+    clientX: number;
+    clientY: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scaleX: number;
+    scaleY: number;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,13 +119,20 @@ export function KnowledgeGraph({
     });
 
     const computedEdges: GraphEdge[] = [];
+    const connectedPairs = new Set<string>();
     const degreeMap = new Map<string, number>();
 
     filteredNotes.forEach((sourceNote) => {
-      const links = extractWikiLinks(sourceNote.content);
+      const links = new Set([
+        ...extractWikiLinks(sourceNote.content),
+        ...(sourceNote.links ?? []).map((link) => link.trim().toLowerCase()),
+      ]);
       links.forEach((targetTitle) => {
         const targetNote = byTitle.get(targetTitle);
         if (targetNote && targetNote.id !== sourceNote.id) {
+          const pairKey = [sourceNote.id, targetNote.id].sort().join("::");
+          if (connectedPairs.has(pairKey)) return;
+          connectedPairs.add(pairKey);
           computedEdges.push({
             source: sourceNote.id,
             target: targetNote.id,
@@ -220,12 +245,20 @@ export function KnowledgeGraph({
   }, [hoveredId, edges]);
 
   function handlePointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    const panStart = panStartRef.current;
+    if (panStart) {
+      setViewBox({
+        x: panStart.x - (e.clientX - panStart.clientX) * panStart.scaleX,
+        y: panStart.y - (e.clientY - panStart.clientY) * panStart.scaleY,
+        width: panStart.width,
+        height: panStart.height,
+      });
+      return;
+    }
     if (!draggingId || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
-    const scaleX = 900 / rect.width;
-    const scaleY = 600 / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const x = viewBox.x + ((e.clientX - rect.left) / rect.width) * viewBox.width;
+    const y = viewBox.y + ((e.clientY - rect.top) / rect.height) * viewBox.height;
 
     const node = simNodesRef.current.find((n) => n.id === draggingId);
     if (node) {
@@ -234,6 +267,51 @@ export function KnowledgeGraph({
       node.vx = 0;
       node.vy = 0;
     }
+  }
+
+  function handleCanvasPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (e.target !== e.currentTarget) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    panStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      x: viewBox.x,
+      y: viewBox.y,
+      width: viewBox.width,
+      height: viewBox.height,
+      scaleX: viewBox.width / rect.width,
+      scaleY: viewBox.height / rect.height,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setPanning(true);
+  }
+
+  function handlePointerEnd() {
+    panStartRef.current = null;
+    setPanning(false);
+    setDraggingId(null);
+  }
+
+  function handleWheel(e: React.WheelEvent<SVGSVGElement>) {
+    e.preventDefault();
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const rect = svg.getBoundingClientRect();
+    const pointerX = (e.clientX - rect.left) / rect.width;
+    const pointerY = (e.clientY - rect.top) / rect.height;
+    const zoomFactor = e.deltaY < 0 ? 0.9 : 1.1;
+    const width = Math.min(1800, Math.max(180, viewBox.width * zoomFactor));
+    const height = Math.min(1200, Math.max(120, viewBox.height * zoomFactor));
+    const graphX = viewBox.x + pointerX * viewBox.width;
+    const graphY = viewBox.y + pointerY * viewBox.height;
+
+    setViewBox({
+      x: graphX - pointerX * width,
+      y: graphY - pointerY * height,
+      width,
+      height,
+    });
   }
 
   const nodeById = useMemo(
@@ -256,16 +334,16 @@ export function KnowledgeGraph({
 
         <div className="flex items-center gap-4">
           <div className="hidden items-center gap-3 sm:flex">
-              {areas.map((area) => (
+            {areas.map((area) => (
               <span
-                  key={area.id}
-                  className="flex items-center gap-1.5 text-[11px] text-zinc-400"
+                key={area.id}
+                className="flex items-center gap-1.5 text-[11px] text-zinc-400"
               >
                 <span
                   className="size-2 rounded-full"
-                    style={{ backgroundColor: area.color }}
+                  style={{ backgroundColor: area.color }}
                 />
-                  {area.name}
+                {area.name}
               </span>
             ))}
           </div>
@@ -303,7 +381,10 @@ export function KnowledgeGraph({
             Construyendo red de nodos…
           </div>
         ) : loadError ? (
-          <div role="alert" className="flex h-full items-center justify-center px-6 text-center text-xs text-red-300">
+          <div
+            role="alert"
+            className="flex h-full items-center justify-center px-6 text-center text-xs text-red-300"
+          >
             {loadError}
           </div>
         ) : renderedNodes.length === 0 ? (
@@ -320,11 +401,18 @@ export function KnowledgeGraph({
         ) : (
           <svg
             ref={svgRef}
-            viewBox="0 0 900 600"
+            viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
+            onPointerDown={handleCanvasPointerDown}
             onPointerMove={handlePointerMove}
-            onPointerUp={() => setDraggingId(null)}
-            onPointerLeave={() => setDraggingId(null)}
-            className="h-full w-full cursor-grab active:cursor-grabbing select-none"
+            onPointerUp={handlePointerEnd}
+            onPointerLeave={() => {
+              if (!panStartRef.current) setDraggingId(null);
+            }}
+            onWheel={handleWheel}
+            className={`h-full w-full select-none ${
+              panning || draggingId ? "cursor-grabbing" : "cursor-grab"
+            }`}
+            style={{ touchAction: "none" }}
           >
             {edges.map((edge, idx) => {
               const s = nodeById.get(edge.source);
@@ -336,17 +424,30 @@ export function KnowledgeGraph({
                 (edge.source === hoveredId || edge.target === hoveredId);
               const isDimmed = hoveredId && !isHighlighted;
 
+              const edgeColor = isHighlighted ? "#34d399" : "#52525b";
+              const edgeOpacity = isDimmed ? 0.15 : isHighlighted ? 0.95 : 0.75;
+
               return (
-                <line
-                  key={`${edge.source}-${edge.target}-${idx}`}
-                  x1={s.x}
-                  y1={s.y}
-                  x2={t.x}
-                  y2={t.y}
-                  stroke={isHighlighted ? "#34d399" : "#3f3f46"}
-                  strokeWidth={isHighlighted ? 2 : 1.2}
-                  strokeOpacity={isDimmed ? 0.15 : isHighlighted ? 0.95 : 0.55}
-                />
+                <g key={`${edge.source}-${edge.target}-${idx}`}>
+                  <line
+                    x1={s.x}
+                    y1={s.y}
+                    x2={t.x}
+                    y2={t.y}
+                    stroke={edgeColor}
+                    strokeWidth={isHighlighted ? 2 : 1.5}
+                    strokeOpacity={edgeOpacity}
+                    pointerEvents="none"
+                  />
+                  <circle
+                    cx={(s.x + t.x) / 2}
+                    cy={(s.y + t.y) / 2}
+                    r={2}
+                    fill={edgeColor}
+                    fillOpacity={edgeOpacity}
+                    pointerEvents="none"
+                  />
+                </g>
               );
             })}
 
@@ -362,6 +463,7 @@ export function KnowledgeGraph({
                   transform={`translate(${node.x}, ${node.y})`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
+                    e.currentTarget.setPointerCapture(e.pointerId);
                     setDraggingId(node.id);
                   }}
                   onClick={() => onSelectNote(node.note)}
@@ -394,7 +496,7 @@ export function KnowledgeGraph({
         )}
 
         <div className="pointer-events-none absolute bottom-3 left-4 rounded-lg border border-zinc-800/80 bg-zinc-950/90 px-3 py-1.5 text-[11px] text-zinc-500">
-          Arrastrá los nodos para moverlos · Clic para abrir la nota · Conectá ideas con{" "}
+          Rueda para zoom · Arrastrá el fondo para mover el lienzo · Arrastrá nodos para moverlos · Clic para abrir · Usá{" "}
           <span className="text-zinc-300">[[Título]]</span>
         </div>
       </div>

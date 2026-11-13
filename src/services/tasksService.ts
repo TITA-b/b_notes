@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import type { AreaId } from "@/types/note";
-import type { Task } from "@/types/task";
+import type { Task, TaskAttachment } from "@/types/task";
 
 export async function getTasksByArea(area: AreaId): Promise<Task[]> {
   const supabase = createClient();
@@ -19,7 +19,8 @@ export async function getTasksByArea(area: AreaId): Promise<Task[]> {
 export async function createTask(
   area: AreaId,
   title: string,
-  dueDate?: string | null
+  dueDate?: string | null,
+  attachments: TaskAttachment[] = []
 ): Promise<Task> {
   const supabase = createClient();
   const { data, error } = await supabase
@@ -30,7 +31,24 @@ export async function createTask(
       due_date: dueDate ? new Date(dueDate).toISOString() : null,
       completed: false,
       sync_to_gcal: false,
+      attachments,
     })
+    .select()
+    .single();
+
+  if (error) throw new Error(error.message);
+  return data as Task;
+}
+
+export async function updateTaskAttachments(
+  id: string,
+  attachments: TaskAttachment[]
+): Promise<Task> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("tasks")
+    .update({ attachments })
+    .eq("id", id)
     .select()
     .single();
 
