@@ -27,19 +27,22 @@ interface GraphEdge {
   target: string;
 }
 
-const AREA_COLORS: Record<AreaId, string> = {
+const AREA_COLORS: Record<string, string> = {
   facultad: "#38bdf8", // sky-400
+  trabajo: "#a855f7",  // purple-500
   weedo: "#a855f7",    // purple-500
   personal: "#34d399", // emerald-400
   finanzas: "#fbbf24", // amber-400
 };
 
-const AREA_LABELS: Record<AreaId, string> = {
-  facultad: "Facultad",
-  weedo: "Weedo",
-  personal: "Personal",
-  finanzas: "Finanzas",
-};
+const PALETTE_FALLBACK = ["#38bdf8", "#a855f7", "#34d399", "#fbbf24", "#f472b6"];
+
+function getAreaColor(area: string, index = 0): string {
+  return (
+    AREA_COLORS[area.toLowerCase()] ??
+    PALETTE_FALLBACK[index % PALETTE_FALLBACK.length]
+  );
+}
 
 function extractWikiLinks(content: string): string[] {
   const regex = /\[\[([^\]]+)\]\]/g;
@@ -77,6 +80,10 @@ export function KnowledgeGraph({
       ? allNotes
       : allNotes.filter((n) => n.area === activeArea);
   }, [allNotes, scope, activeArea]);
+
+  const distinctAreas = useMemo(() => {
+    return Array.from(new Set(allNotes.map((n) => n.area)));
+  }, [allNotes]);
 
   const { edges } = useMemo(() => {
     const byTitle = new Map<string, Note>();
@@ -123,7 +130,6 @@ export function KnowledgeGraph({
     return { edges: computedEdges };
   }, [filteredNotes]);
 
-  // Simulación física de fuerzas (repulsión + resortes + gravedad al centro)
   useEffect(() => {
     let animId: number;
     const width = 900;
@@ -135,7 +141,6 @@ export function KnowledgeGraph({
 
       const nodeMap = new Map(nodes.map((n) => [n.id, n]));
 
-      // 1. Repulsión entre todos los nodos
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i];
@@ -155,7 +160,6 @@ export function KnowledgeGraph({
         }
       }
 
-      // 2. Atracción en los enlaces [[wikilinks]]
       for (const edge of edges) {
         const s = nodeMap.get(edge.source);
         const t = nodeMap.get(edge.target);
@@ -174,7 +178,6 @@ export function KnowledgeGraph({
         t.vy -= fy;
       }
 
-      // 3. Gravedad suave al centro y fricción
       for (const n of nodes) {
         if (n.id === draggingId) continue;
         n.vx += (width / 2 - n.x) * 0.004;
@@ -238,18 +241,18 @@ export function KnowledgeGraph({
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Leyenda de colores */}
+          {/* Leyenda dinámica de áreas */}
           <div className="hidden items-center gap-3 sm:flex">
-            {(Object.keys(AREA_COLORS) as AreaId[]).map((areaKey) => (
+            {distinctAreas.map((areaKey, idx) => (
               <span
                 key={areaKey}
-                className="flex items-center gap-1.5 text-[11px] text-zinc-400"
+                className="flex items-center gap-1.5 text-[11px] capitalize text-zinc-400"
               >
                 <span
                   className="size-2 rounded-full"
-                  style={{ backgroundColor: AREA_COLORS[areaKey] }}
+                  style={{ backgroundColor: getAreaColor(areaKey, idx) }}
                 />
-                {AREA_LABELS[areaKey]}
+                {areaKey}
               </span>
             ))}
           </div>
@@ -334,7 +337,7 @@ export function KnowledgeGraph({
             })}
 
             {/* Nodos */}
-            {nodes.map((node) => {
+            {nodes.map((node, idx) => {
               const radius = 6 + Math.min(node.degree * 2.5, 10);
               const isHovered = hoveredId === node.id;
               const isConnected = connectedToHovered.has(node.id);
@@ -356,7 +359,7 @@ export function KnowledgeGraph({
                 >
                   <circle
                     r={isHovered ? radius + 3 : radius}
-                    fill={AREA_COLORS[node.area]}
+                    fill={getAreaColor(node.area, idx)}
                     stroke="#09090b"
                     strokeWidth={2}
                   />
