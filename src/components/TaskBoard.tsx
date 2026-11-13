@@ -359,7 +359,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
           {gcalConnected ? (
             <button
               type="button"
-              onClick={loadCalendar}
+              onClick={() => loadCalendar()}
               title="Actualizar eventos"
               className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
             >
