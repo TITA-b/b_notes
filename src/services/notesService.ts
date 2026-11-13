@@ -89,3 +89,14 @@ export async function findOrCreateNoteByTitle(
 
   return createNote(fallbackArea, cleanTitle);
 }
+
+export async function getAllNotes(): Promise<Note[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from("notes")
+    .select("*")
+    .order("updated_at", { ascending: false });
+
+  if (error) throw error;
+  return (data ?? []) as Note[];
+}
