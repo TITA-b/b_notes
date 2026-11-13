@@ -38,6 +38,17 @@ function applySession(
 }
 
 export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  const isPublicPwaAsset =
+    pathname === "/manifest.webmanifest" ||
+    pathname === "/sw.js" ||
+    pathname.startsWith("/icon") ||
+    pathname.startsWith("/apple-icon");
+
+  if (isPublicPwaAsset) {
+    return NextResponse.next({ request });
+  }
+
   const { url, key } = supabaseEnv();
   let sessionCookies: SessionCookie[] = [];
   let sessionHeaders: Record<string, string> = {};
@@ -64,7 +75,6 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const pathname = request.nextUrl.pathname;
   const isLogin = pathname === "/login" || pathname.startsWith("/login/");
 
   if (!user && !isLogin) {
@@ -90,6 +100,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest\\.webmanifest|sw\\.js|icon.*|apple-icon.*|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

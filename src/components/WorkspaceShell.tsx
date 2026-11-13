@@ -263,7 +263,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             <button
               type="button"
               onClick={() => setActiveTab("notes")}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+              className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition sm:px-3 ${
                 activeTab === "notes"
                   ? "bg-zinc-100 text-zinc-950"
                   : "text-zinc-400 hover:text-zinc-100"
@@ -275,19 +275,20 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             <button
               type="button"
               onClick={() => setActiveTab("tasks")}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+              className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition sm:px-3 ${
                 activeTab === "tasks"
                   ? "bg-zinc-100 text-zinc-950"
                   : "text-zinc-400 hover:text-zinc-100"
               }`}
             >
               <CalendarCheck2 className="size-3.5" />
-              Tareas y Agenda
+              <span className="sm:hidden">Tareas</span>
+              <span className="hidden sm:inline">Tareas y Agenda</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab("graph")}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+              className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition sm:px-3 ${
                 activeTab === "graph"
                   ? "bg-zinc-100 text-zinc-950"
                   : "text-zinc-400 hover:text-zinc-100"
@@ -298,11 +299,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             </button>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1 sm:gap-3">
             <button
               type="button"
               onClick={() => setGlobalSearchOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white"
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white sm:px-3"
             >
               <Search className="size-3.5" />
               <span className="hidden sm:inline">Buscar</span>
@@ -313,10 +314,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             <button
               type="button"
               onClick={() => setAiOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white"
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white sm:px-3"
             >
               <Sparkles className="size-3.5 text-emerald-400" />
-              Asistente IA
+              <span className="sm:hidden">IA</span>
+              <span className="hidden sm:inline">Asistente IA</span>
             </button>
 
             <span className="hidden text-xs text-zinc-500 md:inline">
