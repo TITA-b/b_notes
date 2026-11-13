@@ -3,18 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { getAllNotes } from "@/services/notesService";
-import type { Note } from "@/types/note";
+import type { Area, Note } from "@/types/note";
 
 interface GlobalSearchModalProps {
   open: boolean;
   onClose: () => void;
   onSelectNote: (note: Note) => void;
+  areas: Area[];
 }
 
 export function GlobalSearchModal({
   open,
   onClose,
   onSelectNote,
+  areas,
 }: GlobalSearchModalProps) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [query, setQuery] = useState("");
@@ -66,10 +68,11 @@ export function GlobalSearchModal({
 
   if (!open) return null;
 
+  const areaNames = new Map(areas.map((area) => [area.slug, area.name]));
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const results = notes.filter((note) =>
-    [note.title, note.content, note.area].some((value) =>
-      value.toLocaleLowerCase().includes(normalizedQuery)
+    [note.title, note.content, areaNames.get(note.area) ?? note.area].some(
+      (value) => value.toLocaleLowerCase().includes(normalizedQuery)
     )
   );
 
@@ -142,7 +145,7 @@ export function GlobalSearchModal({
                       </span>
                     </span>
                     <span className="shrink-0 rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 text-[10px] capitalize text-zinc-400">
-                      {note.area}
+                      {areaNames.get(note.area) ?? note.area}
                     </span>
                   </button>
                 </li>

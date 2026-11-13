@@ -17,6 +17,7 @@ import { TaskBoard } from "@/components/TaskBoard";
 import { KnowledgeGraph } from "@/components/KnowledgeGraph";
 import { AiAssistantDrawer } from "@/components/AiAssistantDrawer";
 import { GlobalSearchModal } from "@/components/GlobalSearchModal";
+import { getAreas } from "@/services/areasService";
 import {
   createNote,
   deleteNote,
@@ -24,13 +25,15 @@ import {
   getNotesByArea,
   updateNote,
 } from "@/services/notesService";
-import type { AreaId, Note } from "@/types/note";
+import type { Area, AreaId, Note } from "@/types/note";
 
 interface WorkspaceShellProps {
   userEmail: string;
 }
 
 export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
+  const [areas, setAreas] = useState<Area[]>([]);
+  const [areasError, setAreasError] = useState<string | null>(null);
   const [activeArea, setActiveArea] = useState<AreaId>("facultad");
   const [activeTab, setActiveTab] = useState<"notes" | "tasks" | "graph">(
     "notes"
@@ -54,6 +57,36 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     notesState.area !== activeArea || notesState.loading;
   const notesError =
     notesState.area === activeArea ? notesState.error : null;
+  const activeAreaInfo = areas.find((area) => area.slug === activeArea);
+  const activeAreaName = activeAreaInfo?.name ?? activeArea;
+
+  useEffect(() => {
+    let cancelled = false;
+    getAreas()
+      .then((loadedAreas) => {
+        if (cancelled) return;
+        setAreas(loadedAreas);
+        setActiveArea((current) =>
+          loadedAreas.some((area) => area.slug === current)
+            ? current
+            : (loadedAreas[0]?.slug ?? "")
+        );
+        setAreasError(null);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setAreasError(
+            error instanceof Error
+              ? error.message
+              : "No se pudieron cargar las áreas."
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const closeGlobalSearch = useCallback(() => {
     setGlobalSearchOpen(false);
@@ -120,6 +153,24 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     setSelectedNoteId(null);
     setMobileEditing(false);
     setActiveArea(area);
+  }
+
+  function handleAreasChanged(updatedAreas: Area[], nextActiveArea?: string) {
+    pendingNoteId.current = null;
+    setAreas(updatedAreas);
+    setAreasError(null);
+
+    const selectedArea =
+      nextActiveArea ??
+      (updatedAreas.some((area) => area.slug === activeArea)
+        ? activeArea
+        : updatedAreas[0]?.slug);
+
+    if (selectedArea && selectedArea !== activeArea) {
+      setSelectedNoteId(null);
+      setMobileEditing(false);
+      setActiveArea(selectedArea);
+    }
   }
 
   function updateNotes(updater: (current: Note[]) => Note[]) {
@@ -193,7 +244,17 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   return (
     <div className="min-h-dvh bg-zinc-950 text-zinc-100 md:pl-72">
-      <Sidebar activeArea={activeArea} onSelectArea={handleSelectArea} />
+      {areasError ? (
+        <p role="alert" className="fixed top-16 right-4 z-[60] rounded-lg border border-red-900/70 bg-zinc-950 px-3 py-2 text-xs text-red-300">
+          {areasError}
+        </p>
+      ) : null}
+      <Sidebar
+        areas={areas}
+        activeArea={activeArea}
+        onSelectArea={handleSelectArea}
+        onAreasChanged={handleAreasChanged}
+      />
 
       <div className="flex h-dvh flex-col pt-14 md:pt-0">
         {/* Barra superior de sub-módulos */}
@@ -273,7 +334,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           </div>
         ) : activeTab === "tasks" ? (
           <div className="flex-1 overflow-hidden">
-            <TaskBoard key={tasksRefreshKey} area={activeArea} />
+            <TaskBoard
+              key={`${activeArea}:${tasksRefreshKey}`}
+              area={activeArea}
+              areaName={activeAreaName}
+            />
           </div>
         ) : (
           <div className="flex flex-1 overflow-hidden">
@@ -284,8 +349,8 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
               }`}
             >
               <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-                <h2 className="text-sm font-semibold capitalize">
-                  {activeArea}
+                <h2 className="text-sm font-semibold">
+                  {activeAreaName}
                 </h2>
                 <button
                   type="button"
@@ -382,6 +447,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                 <NoteEditor
                   key={selectedNote.id}
                   note={selectedNote}
+                  areaName={
+                    areas.find((area) => area.slug === selectedNote.area)?.name ??
+                    selectedNote.area
+                  }
+                  areas={areas}
                   onSave={handleSaveNote}
                   onOpenWikilink={handleOpenWikilink}
                   onBackMobile={() => setMobileEditing(false)}
@@ -391,9 +461,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                   <FileText className="size-8 text-zinc-700" />
                   <p className="mt-3 text-sm">
                     Seleccioná una nota o creá una nueva en{" "}
-                    <span className="capitalize text-zinc-300">
-                      {activeArea}
-                    </span>
+                    <span className="text-zinc-300">{activeAreaName}</span>
                     .
                   </p>
                 </div>
@@ -407,6 +475,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         open={aiOpen}
         onClose={() => setAiOpen(false)}
         activeArea={activeArea}
+        activeAreaName={activeAreaName}
         activeNoteId={selectedNoteId}
         activeNoteTitle={selectedNote?.title}
         onActionsExecuted={({ createdNotes, createdTasks, updatedNote }) => {
@@ -435,6 +504,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         open={globalSearchOpen}
         onClose={closeGlobalSearch}
         onSelectNote={handleSelectNote}
+        areas={areas}
       />
     </div>
   );

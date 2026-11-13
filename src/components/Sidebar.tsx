@@ -4,34 +4,34 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
-  Briefcase,
-  FolderKanban,
-  GraduationCap,
   LogOut,
   Menu,
-  Palette,
+  Settings2,
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import type { AreaId } from "@/types/note";
-
-const areas = [
-  { id: "facultad", label: "Facultad", icon: GraduationCap },
-  { id: "trabajo", label: "Trabajo", icon: Briefcase },
-  { id: "proyectos", label: "Proyectos", icon: FolderKanban },
-  { id: "hobbies", label: "Hobbies", icon: Palette },
-] as const;
+import { getAreaIcon } from "@/lib/areaIcons";
+import { AreaManagerModal } from "@/components/AreaManagerModal";
+import type { Area, AreaId } from "@/types/note";
 
 interface SidebarProps {
+  areas: Area[];
   activeArea: AreaId;
   onSelectArea: (area: AreaId) => void;
+  onAreasChanged: (areas: Area[], nextActiveArea?: string) => void;
 }
 
-export function Sidebar({ activeArea, onSelectArea }: SidebarProps) {
+export function Sidebar({
+  areas,
+  activeArea,
+  onSelectArea,
+  onAreasChanged,
+}: SidebarProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [areaManagerOpen, setAreaManagerOpen] = useState(false);
 
   async function signOut() {
     setSigningOut(true);
@@ -64,14 +64,14 @@ export function Sidebar({ activeArea, onSelectArea }: SidebarProps) {
 
       <nav aria-label="Áreas" className="flex flex-1 flex-col gap-1 px-3">
         {areas.map((area) => {
-          const Icon = area.icon;
-          const isActive = activeArea === area.id;
+          const Icon = getAreaIcon(area.icon);
+          const isActive = activeArea === area.slug;
           return (
             <button
               key={area.id}
               type="button"
               onClick={() => {
-                onSelectArea(area.id);
+                onSelectArea(area.slug);
                 setOpen(false);
               }}
               className={`flex h-10 items-center gap-3 rounded-lg px-3 text-left text-sm transition ${
@@ -80,16 +80,25 @@ export function Sidebar({ activeArea, onSelectArea }: SidebarProps) {
                   : "text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-100"
               }`}
             >
-              <Icon
-                className={`size-4 ${isActive ? "text-zinc-100" : "text-zinc-500"}`}
-              />
-              {area.label}
+              <Icon className="size-4" style={{ color: area.color }} />
+              {area.name}
             </button>
           );
         })}
       </nav>
 
       <div className="space-y-2 border-t border-zinc-800 p-3">
+        <button
+          type="button"
+          onClick={() => {
+            setAreaManagerOpen(true);
+            setOpen(false);
+          }}
+          className="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50"
+        >
+          <Settings2 className="size-4 text-zinc-500" />
+          Gestionar áreas
+        </button>
         <button
           type="button"
           aria-expanded={statusOpen}
@@ -148,6 +157,17 @@ export function Sidebar({ activeArea, onSelectArea }: SidebarProps) {
       >
         {navigation}
       </aside>
+
+      {areaManagerOpen ? (
+        <AreaManagerModal
+          areas={areas}
+          activeAreaId={activeArea}
+          onClose={() => setAreaManagerOpen(false)}
+          onAreasChanged={(updatedAreas, nextActiveArea) => {
+            onAreasChanged(updatedAreas, nextActiveArea);
+          }}
+        />
+      ) : null}
     </>
   );
 }

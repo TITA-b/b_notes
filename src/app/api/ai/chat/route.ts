@@ -21,7 +21,10 @@ interface AiAction {
   end_time?: string;
 }
 
-const VALID_AREAS = ["facultad", "weedo", "personal", "finanzas"];
+interface AvailableArea {
+  slug: string;
+  name: string;
+}
 
 function addOneHour(dateTime: string): string {
   const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(dateTime);
@@ -53,9 +56,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
 
+    const { data: areaRows, error: areasError } = await supabase
+      .from("areas")
+      .select("slug, name")
+      .eq("user_id", user.id)
+      .order("position", { ascending: true });
+
+    if (areasError) throw new Error(areasError.message);
+    const availableAreas = (areaRows ?? []) as AvailableArea[];
+    if (availableAreas.length === 0) {
+      return NextResponse.json(
+        { error: "No hay áreas configuradas para esta cuenta." },
+        { status: 409 }
+      );
+    }
+
     const body = await request.json();
     const messages: ChatMessage[] = body.messages ?? [];
-    const activeArea: string = body.activeArea ?? "facultad";
+    const requestedActiveArea =
+      typeof body.activeArea === "string" ? body.activeArea.toLowerCase() : "";
+    const activeArea =
+      availableAreas.find(
+        (area) => area.slug.toLowerCase() === requestedActiveArea
+      )?.slug ?? availableAreas[0].slug;
     const activeNoteId: string | null = body.activeNoteId ?? null;
     const audioBase64: string | null = body.audioBase64 ?? null;
     const audioMimeType: string | null = body.audioMimeType ?? null;
@@ -120,10 +143,14 @@ export async function POST(request: NextRequest) {
       tasks && tasks.length > 0
         ? tasks
             .map(
-              (t) =>
-                `- [${t.area.toUpperCase()}] ${t.title}${
+              (t) => {
+                const areaName =
+                  availableAreas.find((area) => area.slug === t.area)?.name ??
+                  t.area;
+                return `- [${areaName}] ${t.title}${
                   t.due_date ? ` (Vence: ${t.due_date})` : ""
-                }`
+                }`;
+              }
             )
             .join("\n")
         : "No hay tareas pendientes.";
@@ -156,6 +183,10 @@ export async function POST(request: NextRequest) {
           notes: notesContext,
           tasks: tasksContext,
           calendar: calendarSummary,
+          availableAreas: availableAreas.map(({ slug, name }) => ({
+            slug,
+            name,
+          })),
         },
       }),
     });
@@ -194,10 +225,13 @@ export async function POST(request: NextRequest) {
     let updatedNote = null;
 
     for (const action of actions) {
+      const requestedArea = action.area?.trim().toLowerCase();
       const targetArea =
-        action.area && VALID_AREAS.includes(action.area.toLowerCase())
-          ? action.area.toLowerCase()
-          : activeArea;
+        availableAreas.find(
+          (area) =>
+            area.slug.toLowerCase() === requestedArea ||
+            area.name.toLowerCase() === requestedArea
+        )?.slug ?? activeArea;
 
       if (action.type === "create_task" && action.title) {
         const { data: newTask, error } = await supabase

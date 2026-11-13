@@ -26,6 +26,7 @@ interface AiAssistantDrawerProps {
   open: boolean;
   onClose: () => void;
   activeArea: AreaId;
+  activeAreaName: string;
   activeNoteId: string | null;
   activeNoteTitle?: string | null;
   onActionsExecuted?: (payload: AiActionsPayload) => void;
@@ -48,6 +49,7 @@ export function AiAssistantDrawer({
   open,
   onClose,
   activeArea,
+  activeAreaName,
   activeNoteId,
   activeNoteTitle,
   onActionsExecuted,
@@ -246,7 +248,7 @@ export function AiAssistantDrawer({
                 Asistente B_Notes
               </h3>
               <p className="text-[11px] text-zinc-500 capitalize">
-                Contexto: {activeArea}
+                Contexto: {activeAreaName}
                 {activeNoteTitle ? ` · ${activeNoteTitle}` : ""}
               </p>
             </div>
@@ -285,7 +287,7 @@ export function AiAssistantDrawer({
                 </p>
                 <p className="mt-1 text-xs leading-5 text-zinc-500">
                   Conectado a n8n + Groq. Lee tus notas de{" "}
-                  <span className="capitalize text-zinc-300">{activeArea}</span>,
+                  <span className="text-zinc-300">{activeAreaName}</span>,
                   tus entregas pendientes y puede crear notas o tareas por vos.
                 </p>
               </div>

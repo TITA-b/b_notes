@@ -18,10 +18,12 @@ import {
   Loader2,
 } from "lucide-react";
 import { getAllNotes } from "@/services/notesService";
-import type { Note } from "@/types/note";
+import type { Area, Note } from "@/types/note";
 
 interface NoteEditorProps {
   note: Note;
+  areaName: string;
+  areas: Area[];
   onSave: (id: string, updates: { title?: string; content?: string }) => Promise<Note>;
   onOpenWikilink: (title: string) => void;
   onBackMobile: () => void;
@@ -41,6 +43,8 @@ function parseLinksLive(text: string): string[] {
 
 export function NoteEditor({
   note,
+  areaName,
+  areas,
   onSave,
   onOpenWikilink,
   onBackMobile,
@@ -110,6 +114,7 @@ export function NoteEditor({
     backlinksErrorState.title === note.title.trim()
       ? backlinksErrorState.message
       : null;
+  const areaNames = new Map(areas.map((area) => [area.slug, area.name]));
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -203,7 +208,7 @@ TaskItem.configure({
           </button>
 
           <span className="text-xs text-zinc-500 capitalize">
-            Área: <strong className="font-medium text-zinc-300">{note.area}</strong>
+            Área: <strong className="font-medium text-zinc-300">{areaName}</strong>
           </span>
 
           {/* Barra rápida de formato */}
@@ -289,7 +294,7 @@ TaskItem.configure({
               >
                 <span>{backlink.title || "Sin título"}</span>
                 <span className="capitalize text-zinc-500">
-                  {backlink.area}
+                  {areaNames.get(backlink.area) ?? backlink.area}
                 </span>
               </button>
             ))}

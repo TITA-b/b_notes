@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Network, Sparkles } from "lucide-react";
 import { getAllNotes } from "@/services/notesService";
-import type { AreaId, Note } from "@/types/note";
+import { getAreas } from "@/services/areasService";
+import type { Area, AreaId, Note } from "@/types/note";
 
 interface KnowledgeGraphProps {
   activeArea: AreaId;
@@ -27,23 +28,6 @@ interface GraphEdge {
   target: string;
 }
 
-const AREA_COLORS: Record<string, string> = {
-  facultad: "#38bdf8",
-  trabajo: "#a855f7",
-  weedo: "#a855f7",
-  personal: "#34d399",
-  finanzas: "#fbbf24",
-};
-
-const PALETTE_FALLBACK = ["#38bdf8", "#a855f7", "#34d399", "#fbbf24", "#f472b6"];
-
-function getAreaColor(area: string, index = 0): string {
-  return (
-    AREA_COLORS[area.toLowerCase()] ??
-    PALETTE_FALLBACK[index % PALETTE_FALLBACK.length]
-  );
-}
-
 function extractWikiLinks(content: string): string[] {
   const regex = /\[\[([^\]]+)\]\]/g;
   const matches: string[] = [];
@@ -59,7 +43,9 @@ export function KnowledgeGraph({
   onSelectNote,
 }: KnowledgeGraphProps) {
   const [allNotes, setAllNotes] = useState<Note[]>([]);
+  const [areas, setAreas] = useState<Area[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [scope, setScope] = useState<"all" | "area">("all");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -70,9 +56,22 @@ export function KnowledgeGraph({
 
   useEffect(() => {
     let cancelled = false;
-    getAllNotes()
-      .then((data) => {
-        if (!cancelled) setAllNotes(data);
+    Promise.all([getAllNotes(), getAreas()])
+      .then(([notes, loadedAreas]) => {
+        if (!cancelled) {
+          setAllNotes(notes);
+          setAreas(loadedAreas);
+          setLoadError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "No se pudieron cargar las áreas y notas."
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -89,9 +88,11 @@ export function KnowledgeGraph({
       : allNotes.filter((n) => n.area === activeArea);
   }, [allNotes, scope, activeArea]);
 
-  const distinctAreas = useMemo(() => {
-    return Array.from(new Set(allNotes.map((n) => n.area)));
-  }, [allNotes]);
+  const areaBySlug = useMemo(
+    () => new Map(areas.map((area) => [area.slug, area])),
+    [areas]
+  );
+  const activeAreaName = areaBySlug.get(activeArea)?.name ?? activeArea;
 
   const { initialNodes, edges } = useMemo(() => {
     const byTitle = new Map<string, Note>();
@@ -255,16 +256,16 @@ export function KnowledgeGraph({
 
         <div className="flex items-center gap-4">
           <div className="hidden items-center gap-3 sm:flex">
-            {distinctAreas.map((areaKey, idx) => (
+              {areas.map((area) => (
               <span
-                key={areaKey}
-                className="flex items-center gap-1.5 text-[11px] capitalize text-zinc-400"
+                  key={area.id}
+                  className="flex items-center gap-1.5 text-[11px] text-zinc-400"
               >
                 <span
                   className="size-2 rounded-full"
-                  style={{ backgroundColor: getAreaColor(areaKey, idx) }}
+                    style={{ backgroundColor: area.color }}
                 />
-                {areaKey}
+                  {area.name}
               </span>
             ))}
           </div>
@@ -284,13 +285,13 @@ export function KnowledgeGraph({
             <button
               type="button"
               onClick={() => setScope("area")}
-              className={`rounded-md px-2.5 py-1 capitalize transition ${
+              className={`rounded-md px-2.5 py-1 transition ${
                 scope === "area"
                   ? "bg-zinc-800 font-medium text-zinc-100"
                   : "text-zinc-400 hover:text-zinc-200"
               }`}
             >
-              Solo {activeArea}
+              Solo {activeAreaName}
             </button>
           </div>
         </div>
@@ -300,6 +301,10 @@ export function KnowledgeGraph({
         {loading ? (
           <div className="flex h-full items-center justify-center text-xs text-zinc-500">
             Construyendo red de nodos…
+          </div>
+        ) : loadError ? (
+          <div role="alert" className="flex h-full items-center justify-center px-6 text-center text-xs text-red-300">
+            {loadError}
           </div>
         ) : renderedNodes.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center p-6 text-center">
@@ -345,7 +350,7 @@ export function KnowledgeGraph({
               );
             })}
 
-            {renderedNodes.map((node, idx) => {
+            {renderedNodes.map((node) => {
               const radius = 6 + Math.min(node.degree * 2.5, 10);
               const isHovered = hoveredId === node.id;
               const isConnected = connectedToHovered.has(node.id);
@@ -367,7 +372,7 @@ export function KnowledgeGraph({
                 >
                   <circle
                     r={isHovered ? radius + 3 : radius}
-                    fill={getAreaColor(node.area, idx)}
+                    fill={areaBySlug.get(node.area)?.color ?? "#71717a"}
                     stroke="#09090b"
                     strokeWidth={2}
                   />

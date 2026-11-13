@@ -23,6 +23,7 @@ import type { Task } from "@/types/task";
 
 interface TaskBoardProps {
   area: AreaId;
+  areaName: string;
 }
 
 interface GCalEvent {
@@ -48,7 +49,7 @@ function isOverdue(iso: string | null, completed: boolean) {
   return new Date(iso).getTime() < Date.now();
 }
 
-export function TaskBoard({ area }: TaskBoardProps) {
+export function TaskBoard({ area, areaName }: TaskBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadedArea, setLoadedArea] = useState<AreaId | null>(null);
   const [title, setTitle] = useState("");
@@ -188,7 +189,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
       <div className="flex-1 overflow-y-auto px-5 py-6 md:px-8">
         <div>
           <h2 className="text-xl font-semibold tracking-tight capitalize">
-            Entregas y tareas — {area}
+            Entregas y tareas — {areaName}
           </h2>
           <p className="mt-1 text-xs text-zinc-500">
             {pendingTasks.length} pendiente{pendingTasks.length === 1 ? "" : "s"}
@@ -234,7 +235,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
           ) : tasks.length === 0 ? (
             <p className="rounded-xl border border-dashed border-zinc-800 py-12 text-center text-xs text-zinc-500">
               No tenés entregas ni tareas cargadas en{" "}
-              <span className="capitalize text-zinc-300">{area}</span>.
+              <span className="text-zinc-300">{areaName}</span>.
             </p>
           ) : (
             <>

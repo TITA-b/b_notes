@@ -1,4 +1,15 @@
-export type AreaId = "facultad" | "trabajo" | "proyectos" | "hobbies";
+export type AreaId = string;
+
+export interface Area {
+  id: string;
+  user_id: string;
+  slug: string;
+  name: string;
+  icon: string;
+  color: string;
+  position: number;
+  created_at: string;
+}
 
 export interface Note {
   id: string;
