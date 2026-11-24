@@ -1,7 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
 import { getOAuthClient } from "@/lib/google";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  if (!(await getCurrentUser())) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
   const oauth2Client = getOAuthClient();
 
   const url = oauth2Client.generateAuthUrl({

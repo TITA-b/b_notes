@@ -1,5 +1,5 @@
-import { createClient } from "@/lib/supabase/client";
 import type { AreaId, Note } from "@/types/note";
+import { apiRequest, jsonBody } from "@/services/apiClient";
 import {
   clearOfflineCacheStorage,
   isNetworkFailure,
@@ -45,23 +45,19 @@ function extractWikilinks(markdown: string): string[] {
 }
 
 export async function getNotesByArea(area: AreaId): Promise<Note[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("notes")
-    .select("*")
-    .eq("area", area)
-    .order("updated_at", { ascending: false });
-
-  if (error) {
+  try {
+    const notes = await apiRequest<Note[]>(
+      `/api/data/notes?area=${encodeURIComponent(area)}`
+    );
+    cacheNotes(notes, area);
+    return notes;
+  } catch (error) {
     if (isNetworkFailure(error)) {
       const cached = getCachedNotes(area);
       if (cached) return cached;
     }
-    throw new Error(error.message);
+    throw error;
   }
-  const notes = (data ?? []) as Note[];
-  cacheNotes(notes, area);
-  return notes;
 }
 
 export async function createNote(
@@ -69,83 +65,57 @@ export async function createNote(
   title = "Sin título",
   content = ""
 ): Promise<Note> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("notes")
-    .insert({ area, title, content, links: [] })
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Note;
+  return apiRequest<Note>("/api/data/notes", {
+    method: "POST",
+    body: jsonBody({ area, title, content, links: [] }),
+  });
 }
 
 export async function updateNote(
   id: string,
   updates: { title?: string; content?: string }
 ): Promise<Note> {
-  const supabase = createClient();
-  const payload: Record<string, unknown> = {
-    ...updates,
-    updated_at: new Date().toISOString(),
-  };
-
-  if (typeof updates.content === "string") {
-    payload.links = extractWikilinks(updates.content);
-  }
-
-  const { data, error } = await supabase
-    .from("notes")
-    .update(payload)
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Note;
+  return apiRequest<Note>("/api/data/notes", {
+    method: "PATCH",
+    body: jsonBody({
+      id,
+      ...updates,
+      ...(typeof updates.content === "string"
+        ? { links: extractWikilinks(updates.content) }
+        : {}),
+    }),
+  });
 }
 
 export async function deleteNote(id: string): Promise<void> {
-  const supabase = createClient();
-  const { error } = await supabase.from("notes").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  await apiRequest<void>(`/api/data/notes?id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function findOrCreateNoteByTitle(
   title: string,
   fallbackArea: AreaId
 ): Promise<Note> {
-  const supabase = createClient();
   const cleanTitle = title.trim();
-
-  const { data: existing, error: searchError } = await supabase
-    .from("notes")
-    .select("*")
-    .ilike("title", cleanTitle)
-    .limit(1)
-    .maybeSingle();
-
-  if (searchError) throw new Error(searchError.message);
-  if (existing) return existing as Note;
+  const existing = await apiRequest<Note[]>(
+    `/api/data/notes?title=${encodeURIComponent(cleanTitle)}`
+  );
+  if (existing[0]) return existing[0];
 
   return createNote(fallbackArea, cleanTitle);
 }
 
 export async function getAllNotes(): Promise<Note[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("notes")
-    .select("*")
-    .order("updated_at", { ascending: false });
-
-  if (error) {
+  try {
+    const notes = await apiRequest<Note[]>("/api/data/notes");
+    cacheNotes(notes);
+    return notes;
+  } catch (error) {
     if (isNetworkFailure(error)) {
       const cached = getCachedNotes();
       if (cached) return cached;
     }
-    throw new Error(error.message);
+    throw error;
   }
-  const notes = (data ?? []) as Note[];
-  cacheNotes(notes);
-  return notes;
 }

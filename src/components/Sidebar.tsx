@@ -11,7 +11,6 @@ import {
   Settings2,
   X,
 } from "lucide-react";
-import { createClient } from "@/lib/supabase/client";
 import { clearServiceWorkerRuntimeCache } from "@/services/offlineCache";
 import { downloadAllNotesAsZip } from "@/lib/exportNotes";
 import { getAreaIcon } from "@/lib/areaIcons";
@@ -44,6 +43,7 @@ export function Sidebar({
   const [signingOut, setSigningOut] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
 
   useEffect(() => {
     function handleOnline() {
@@ -57,12 +57,23 @@ export function Sidebar({
 
   async function signOut() {
     setSigningOut(true);
+    setSignOutError(null);
     clearOfflineCache();
     clearServiceWorkerRuntimeCache();
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/login");
-    router.refresh();
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) {
+        throw new Error("No se pudo cerrar la sesión.");
+      }
+      router.push("/login");
+      router.refresh();
+    } catch (error) {
+      setSignOutError(
+        error instanceof Error ? error.message : "No se pudo cerrar la sesión."
+      );
+    } finally {
+      setSigningOut(false);
+    }
   }
 
   async function exportBackup() {
@@ -164,6 +175,11 @@ export function Sidebar({
         {exportError ? (
           <p role="alert" className="px-3 text-xs leading-5 text-red-300">
             {exportError}
+          </p>
+        ) : null}
+        {signOutError ? (
+          <p role="alert" className="px-3 text-xs leading-5 text-red-300">
+            {signOutError}
           </p>
         ) : null}
         <button

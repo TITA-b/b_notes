@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bnotes
+      POSTGRES_DB: bnotes
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bnotes -d bnotes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bnotes_net
+
+  b-notes:
+    image: ghcr.io/tita-b/b_notes:latest
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://bnotes:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/bnotes
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/b-notes-assistant}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/google/callback}
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - bnotes_net
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      TZ: America/Argentina/Buenos_Aires
+      GENERIC_TIMEZONE: America/Argentina/Buenos_Aires
+    volumes:
+      - n8n_data:/home/node/.n8n
+    networks:
+      - bnotes_net
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    command:
+      - --label-enable
+      - --cleanup
+      - --interval
+      - "300"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - bnotes_net
+
+volumes:
+  postgres_data:
+  n8n_data:
+
+networks:
+  bnotes_net:
+    name: bnotes_net
+    driver: bridge

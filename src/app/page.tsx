@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { WorkspaceShell } from "@/components/WorkspaceShell";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/auth";
 
 function HomeFallback() {
   return (
@@ -12,16 +12,13 @@ function HomeFallback() {
 }
 
 async function ProtectedHome() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getCurrentUser();
 
   if (!user) {
     redirect("/login");
   }
 
-  return <WorkspaceShell userEmail={user.email ?? "usuario"} />;
+  return <WorkspaceShell userEmail={user.email} />;
 }
 
 export default function HomePage() {

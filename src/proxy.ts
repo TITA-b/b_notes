@@ -1,101 +1,46 @@
-import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { verifySessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
-type SessionCookie = {
-  name: string;
-  value: string;
-  options: CookieOptions;
-};
+const PUBLIC_PATHS = [
+  "/login",
+  "/api/auth/",
+  "/api/health",
+  "/manifest.webmanifest",
+  "/sw.js",
+];
 
-function supabaseEnv() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !key) {
-    throw new Error(
-      "Faltan NEXT_PUBLIC_SUPABASE_URL o NEXT_PUBLIC_SUPABASE_ANON_KEY.",
-    );
-  }
-
-  return {
-    url: url.replace(/\/rest\/v1\/?$/, ""),
-    key,
-  };
-}
-
-function applySession(
-  response: NextResponse,
-  sessionCookies: SessionCookie[],
-  headers: Record<string, string>,
-) {
-  sessionCookies.forEach(({ name, value, options }) => {
-    response.cookies.set(name, value, options);
-  });
-
-  Object.entries(headers).forEach(([key, value]) => {
-    response.headers.set(key, value);
-  });
+function isPublicPath(pathname: string): boolean {
+  return (
+    PUBLIC_PATHS.some((path) =>
+      path.endsWith("/") ? pathname.startsWith(path) : pathname === path
+    ) ||
+    pathname.startsWith("/icon") ||
+    pathname.startsWith("/apple-icon")
+  );
 }
 
 export async function proxy(request: NextRequest) {
-  const pathname = request.nextUrl.pathname;
-  const isPublicPwaAsset =
-    pathname === "/manifest.webmanifest" ||
-    pathname === "/sw.js" ||
-    pathname.startsWith("/icon") ||
-    pathname.startsWith("/apple-icon");
-
-  if (isPublicPwaAsset) {
-    return NextResponse.next({ request });
+  const { pathname } = request.nextUrl;
+  if (isPublicPath(pathname)) {
+    if (pathname === "/login") {
+      const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+      if (token && (await verifySessionToken(token))) {
+        return NextResponse.redirect(new URL("/", request.url));
+      }
+    }
+    return NextResponse.next();
   }
 
-  const { url, key } = supabaseEnv();
-  let sessionCookies: SessionCookie[] = [];
-  let sessionHeaders: Record<string, string> = {};
-  let supabaseResponse = NextResponse.next({ request });
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  const user = token ? await verifySessionToken(token) : null;
+  if (user) return NextResponse.next();
 
-  const supabase = createServerClient(url, key, {
-    cookies: {
-      getAll() {
-        return request.cookies.getAll();
-      },
-      setAll(cookiesToSet, headers) {
-        sessionCookies = cookiesToSet;
-        sessionHeaders = headers;
-        cookiesToSet.forEach(({ name, value }) => {
-          request.cookies.set(name, value);
-        });
-        supabaseResponse = NextResponse.next({ request });
-        applySession(supabaseResponse, sessionCookies, sessionHeaders);
-      },
-    },
-  });
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const isLogin = pathname === "/login" || pathname.startsWith("/login/");
-
-  if (!user && !isLogin) {
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/login";
-    redirectUrl.search = "";
-    const redirectResponse = NextResponse.redirect(redirectUrl);
-    applySession(redirectResponse, sessionCookies, sessionHeaders);
-    return redirectResponse;
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "No autorizado." }, { status: 401 });
   }
 
-  if (user && isLogin) {
-    const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/";
-    redirectUrl.search = "";
-    const redirectResponse = NextResponse.redirect(redirectUrl);
-    applySession(redirectResponse, sessionCookies, sessionHeaders);
-    return redirectResponse;
-  }
-
-  return supabaseResponse;
+  const loginUrl = new URL("/login", request.url);
+  return NextResponse.redirect(loginUrl);
 }
 
 export const config = {

@@ -1,6 +1,6 @@
-import { createClient } from "@/lib/supabase/client";
 import type { AreaId } from "@/types/note";
 import type { Task, TaskAttachment } from "@/types/task";
+import { apiRequest, jsonBody } from "@/services/apiClient";
 import {
   clearOfflineCacheStorage,
   isNetworkFailure,
@@ -16,16 +16,16 @@ export function clearOfflineCache(): void {
 }
 
 export async function getTasksByArea(area: AreaId): Promise<Task[]> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("tasks")
-    .select("*")
-    .eq("area", area)
-    .order("completed", { ascending: true })
-    .order("due_date", { ascending: true, nullsFirst: false })
-    .order("created_at", { ascending: false });
-
-  if (error) {
+  try {
+    const tasks = await apiRequest<Task[]>(
+      `/api/data/tasks?area=${encodeURIComponent(area)}`
+    );
+    const cached = (readOfflineCache<Task>(TASKS_CACHE_KEY) ?? []).filter(
+      (task) => task.area !== area
+    );
+    writeOfflineCache(TASKS_CACHE_KEY, [...cached, ...tasks]);
+    return tasks;
+  } catch (error) {
     if (isNetworkFailure(error)) {
       const cached = readOfflineCache<Task>(TASKS_CACHE_KEY);
       if (cached) {
@@ -33,14 +33,8 @@ export async function getTasksByArea(area: AreaId): Promise<Task[]> {
         return cached.filter((task) => task.area === area);
       }
     }
-    throw new Error(error.message);
+    throw error;
   }
-  const tasks = (data ?? []) as Task[];
-  const cached = (readOfflineCache<Task>(TASKS_CACHE_KEY) ?? []).filter(
-    (task) => task.area !== area
-  );
-  writeOfflineCache(TASKS_CACHE_KEY, [...cached, ...tasks]);
-  return tasks;
 }
 
 export async function createTask(
@@ -49,29 +43,23 @@ export async function createTask(
   dueDate?: string | null,
   attachments: TaskAttachment[] = []
 ): Promise<Task> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("tasks")
-    .insert({
+  return apiRequest<Task>("/api/data/tasks", {
+    method: "POST",
+    body: jsonBody({
       area,
       title: title.trim(),
       due_date: dueDate ? new Date(dueDate).toISOString() : null,
       completed: false,
       sync_to_gcal: false,
       attachments,
-    })
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Task;
+    }),
+  });
 }
 
 export async function updateTask(
   id: string,
   updates: { title?: string; due_date?: string | null; area?: AreaId }
 ): Promise<Task> {
-  const supabase = createClient();
   const payload = {
     ...updates,
     ...(updates.title !== undefined ? { title: updates.title.trim() } : {}),
@@ -83,82 +71,56 @@ export async function updateTask(
         }
       : {}),
   };
-  const { data, error } = await supabase
-    .from("tasks")
-    .update(payload)
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Task;
+  return apiRequest<Task>("/api/data/tasks", {
+    method: "PATCH",
+    body: jsonBody({ id, ...payload }),
+  });
 }
 
 export async function importCalendarEventAsTask(
   area: AreaId,
   event: { id: string; summary: string; start: string }
 ): Promise<Task> {
-  const supabase = createClient();
-  const { data: existing, error: lookupError } = await supabase
-    .from("tasks")
-    .select("*")
-    .eq("gcal_event_id", event.id)
-    .maybeSingle();
+  const existing = await apiRequest<Task[]>(
+    `/api/data/tasks?gcal_event_id=${encodeURIComponent(event.id)}`
+  );
+  if (existing[0]) return existing[0];
 
-  if (lookupError) throw new Error(lookupError.message);
-  if (existing) return existing as Task;
-
-  const { data, error } = await supabase
-    .from("tasks")
-    .insert({
+  return apiRequest<Task>("/api/data/tasks", {
+    method: "POST",
+    body: jsonBody({
       area,
       title: event.summary,
       due_date: event.start ? new Date(event.start).toISOString() : null,
       completed: false,
       sync_to_gcal: true,
       gcal_event_id: event.id,
-    })
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Task;
+    }),
+  });
 }
 
 export async function updateTaskAttachments(
   id: string,
   attachments: TaskAttachment[]
 ): Promise<Task> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("tasks")
-    .update({ attachments })
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Task;
+  return apiRequest<Task>("/api/data/tasks", {
+    method: "PATCH",
+    body: jsonBody({ id, attachments }),
+  });
 }
 
 export async function toggleTaskCompleted(
   id: string,
   completed: boolean
 ): Promise<Task> {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from("tasks")
-    .update({ completed })
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
-  return data as Task;
+  return apiRequest<Task>("/api/data/tasks", {
+    method: "PATCH",
+    body: jsonBody({ id, completed }),
+  });
 }
 
 export async function deleteTask(id: string): Promise<void> {
-  const supabase = createClient();
-  const { error } = await supabase.from("tasks").delete().eq("id", id);
-  if (error) throw new Error(error.message);
+  await apiRequest<void>(`/api/data/tasks?id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }

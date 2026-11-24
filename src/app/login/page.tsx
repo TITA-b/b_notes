@@ -2,28 +2,6 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-
-function authErrorMessage(message: string) {
-  const normalized = message.toLowerCase();
-
-  if (normalized.includes("invalid login credentials")) {
-    return "Correo o contraseña incorrectos.";
-  }
-
-  if (normalized.includes("email not confirmed")) {
-    return "Confirmá el correo antes de iniciar sesión.";
-  }
-
-  if (
-    normalized.includes("too many requests") ||
-    normalized.includes("rate limit")
-  ) {
-    return "Demasiados intentos. Esperá un momento y volvé a intentar.";
-  }
-
-  return "No se pudo iniciar sesión. Revisá los datos e intentá de nuevo.";
-}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,6 +9,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,20 +24,32 @@ export default function LoginPage() {
 
     setPending(true);
 
-    const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: trimmedEmail,
-      password,
-    });
+    try {
+      const response = await fetch(
+        creatingAccount ? "/api/auth/register" : "/api/auth/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: trimmedEmail, password }),
+        }
+      );
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        setError(result.error ?? "No se pudo completar la autenticación.");
+        return;
+      }
 
-    if (signInError) {
-      setError(authErrorMessage(signInError.message));
+      router.push("/");
+      router.refresh();
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "No se pudo conectar con el servidor."
+      );
+    } finally {
       setPending(false);
-      return;
     }
-
-    router.push("/");
-    router.refresh();
   }
 
   return (
@@ -68,10 +59,12 @@ export default function LoginPage() {
           B_Notes
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight">
-          Iniciar sesión
+          {creatingAccount ? "Crear cuenta local" : "Iniciar sesión"}
         </h1>
         <p className="mt-2 text-sm leading-6 text-zinc-400">
-          Entrá con el correo y la contraseña de tu cuenta.
+          {creatingAccount
+            ? "Creá una cuenta local para empezar a usar B_Notes."
+            : "Entrá con el correo y la contraseña de tu cuenta."}
         </p>
 
         <form className="mt-8 space-y-4" onSubmit={handleSubmit} noValidate>
@@ -100,7 +93,7 @@ export default function LoginPage() {
               id="password"
               name="password"
               type="password"
-              autoComplete="current-password"
+              autoComplete={creatingAccount ? "new-password" : "current-password"}
               required
               value={password}
               onChange={(event) => setPassword(event.target.value)}
@@ -119,9 +112,28 @@ export default function LoginPage() {
             disabled={pending}
             className="h-11 w-full rounded-lg bg-zinc-100 text-sm font-medium text-zinc-950 transition hover:bg-white disabled:cursor-wait disabled:opacity-70"
           >
-            {pending ? "Ingresando…" : "Entrar"}
+            {pending
+              ? creatingAccount
+                ? "Creando cuenta…"
+                : "Ingresando…"
+              : creatingAccount
+                ? "Crear cuenta"
+                : "Entrar"}
           </button>
         </form>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => {
+            setCreatingAccount((current) => !current);
+            setError(null);
+          }}
+          className="mt-5 w-full text-sm text-zinc-400 transition hover:text-zinc-100 disabled:opacity-60"
+        >
+          {creatingAccount
+            ? "¿Ya tenés cuenta? Iniciar sesión"
+            : "¿Primera vez? Crear cuenta local"}
+        </button>
       </section>
     </main>
   );

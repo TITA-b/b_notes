@@ -1,5 +1,6 @@
 import { google } from "googleapis";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/auth";
+import { query } from "@/lib/db";
 
 export function getOAuthClient() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -15,39 +16,46 @@ export function getOAuthClient() {
 }
 
 async function getAuthenticatedOAuthClient() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getCurrentUser();
   if (!user) return null;
 
-  const { data: tokenRow } = await supabase
-    .from("google_tokens")
-    .select("*")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
+  const { rows } = await query<{
+    access_token: string;
+    refresh_token: string | null;
+    expiry_date: string | number | null;
+  }>(
+    "SELECT access_token, refresh_token, expiry_date FROM google_tokens WHERE user_id = $1",
+    [user.id]
+  );
+  const tokenRow = rows[0];
   if (!tokenRow) return null;
 
   const oauth2Client = getOAuthClient();
   oauth2Client.setCredentials({
     access_token: tokenRow.access_token,
     refresh_token: tokenRow.refresh_token ?? undefined,
-    expiry_date: tokenRow.expiry_date ?? undefined,
+    expiry_date: tokenRow.expiry_date ? Number(tokenRow.expiry_date) : undefined,
   });
 
-  // Si Google renueva el token automáticamente, lo actualizamos en Supabase
   oauth2Client.on("tokens", async (tokens) => {
-    await supabase
-      .from("google_tokens")
-      .update({
-        access_token: tokens.access_token ?? tokenRow.access_token,
-        refresh_token: tokens.refresh_token ?? tokenRow.refresh_token,
-        expiry_date: tokens.expiry_date ?? tokenRow.expiry_date,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("user_id", user.id);
+    try {
+      await query(
+        `UPDATE google_tokens
+         SET access_token = $1, refresh_token = $2, expiry_date = $3, updated_at = now()
+         WHERE user_id = $4`,
+        [
+          tokens.access_token ?? tokenRow.access_token,
+          tokens.refresh_token ?? tokenRow.refresh_token,
+          tokens.expiry_date ?? tokenRow.expiry_date,
+          user.id,
+        ]
+      );
+    } catch (error) {
+      console.error(
+        "No se pudo guardar la renovación de credenciales de Google:",
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   });
 
   return oauth2Client;

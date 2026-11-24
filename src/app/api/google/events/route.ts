@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAuthenticatedCalendar } from "@/lib/google";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/auth";
+import { query } from "@/lib/db";
 
 export async function GET() {
   try {
@@ -8,7 +9,7 @@ export async function GET() {
     if (!calendar) {
       return NextResponse.json({
         connected: false,
-        reason: "no_token_in_supabase",
+        reason: "no_google_token",
         events: [],
       });
     }
@@ -69,11 +70,13 @@ export async function POST(request: NextRequest) {
     const eventId = created.data.id ?? null;
 
     if (taskId && eventId) {
-      const supabase = await createClient();
-      await supabase
-        .from("tasks")
-        .update({ sync_to_gcal: true, gcal_event_id: eventId })
-        .eq("id", taskId);
+      const user = await getCurrentUser();
+      if (user) {
+        await query(
+          "UPDATE tasks SET sync_to_gcal = true, gcal_event_id = $1 WHERE id = $2 AND user_id = $3",
+          [eventId, taskId, user.id]
+        );
+      }
     }
 
     return NextResponse.json({ ok: true, eventId });

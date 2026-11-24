@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getOAuthClient } from "@/lib/google";
-import { createClient } from "@/lib/supabase/server";
+import { getCurrentUser } from "@/lib/auth";
+import { query } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   const code = request.nextUrl.searchParams.get("code");
@@ -10,11 +11,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${baseUrl}/?google_error=missing_code`);
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getCurrentUser();
   if (!user) {
     return NextResponse.redirect(`${baseUrl}/login`);
   }
@@ -22,22 +19,21 @@ export async function GET(request: NextRequest) {
   const oauth2Client = getOAuthClient();
   const { tokens } = await oauth2Client.getToken(code);
 
-  const { error: dbError } = await supabase.from("google_tokens").upsert(
-    {
-      user_id: user.id,
-      access_token: tokens.access_token ?? "",
-      refresh_token: tokens.refresh_token ?? null,
-      expiry_date: tokens.expiry_date ?? null,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id" }
+  await query(
+    `INSERT INTO google_tokens (user_id, access_token, refresh_token, expiry_date, updated_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (user_id) DO UPDATE SET
+       access_token = EXCLUDED.access_token,
+       refresh_token = COALESCE(EXCLUDED.refresh_token, google_tokens.refresh_token),
+       expiry_date = EXCLUDED.expiry_date,
+       updated_at = now()`,
+    [
+      user.id,
+      tokens.access_token ?? "",
+      tokens.refresh_token ?? null,
+      tokens.expiry_date ?? null,
+    ]
   );
-
-  if (dbError) {
-    return NextResponse.redirect(
-      `${baseUrl}/?google_error=${encodeURIComponent(dbError.message)}`
-    );
-  }
 
   return NextResponse.redirect(`${baseUrl}/`);
 }

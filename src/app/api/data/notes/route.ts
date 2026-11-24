@@ -1,0 +1,117 @@
+import { NextResponse } from "next/server";
+import type { Note } from "@/types/note";
+import { authenticateDataRequest, invalidRequest, notFound } from "@/app/api/data/_lib";
+import { query } from "@/lib/db";
+
+export async function GET(request: Request) {
+  const auth = await authenticateDataRequest();
+  if (auth.response) return auth.response;
+
+  const url = new URL(request.url);
+  const area = url.searchParams.get("area");
+  const title = url.searchParams.get("title");
+  const values: unknown[] = [auth.user.id];
+  const filters = ["user_id = $1"];
+  if (area) {
+    values.push(area);
+    filters.push(`area = $${values.length}`);
+  }
+  if (title) {
+    values.push(title);
+    filters.push(`lower(title) = lower($${values.length})`);
+  }
+  const { rows } = await query<Note>(
+    `SELECT * FROM notes WHERE ${filters.join(" AND ")} ORDER BY updated_at DESC`,
+    values
+  );
+  return NextResponse.json(rows);
+}
+
+export async function POST(request: Request) {
+  const auth = await authenticateDataRequest();
+  if (auth.response) return auth.response;
+
+  let body: { area?: unknown; title?: unknown; content?: unknown; links?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return invalidRequest("El cuerpo de la solicitud no es válido.");
+  }
+  if (
+    typeof body.area !== "string" ||
+    typeof body.title !== "string" ||
+    !body.title.trim() ||
+    (body.content !== undefined && typeof body.content !== "string") ||
+    (body.links !== undefined && !Array.isArray(body.links))
+  ) {
+    return invalidRequest("Faltan datos válidos para crear la nota.");
+  }
+
+  const { rows } = await query<Note>(
+    "INSERT INTO notes (user_id, area, title, content, links) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+    [auth.user.id, body.area, body.title.trim(), body.content ?? "", body.links ?? []]
+  );
+  return NextResponse.json(rows[0], { status: 201 });
+}
+
+export async function PATCH(request: Request) {
+  const auth = await authenticateDataRequest();
+  if (auth.response) return auth.response;
+
+  let body: {
+    id?: unknown;
+    title?: unknown;
+    content?: unknown;
+    links?: unknown;
+  };
+  try {
+    body = await request.json();
+  } catch {
+    return invalidRequest("El cuerpo de la solicitud no es válido.");
+  }
+  if (typeof body.id !== "string") return invalidRequest("Falta el identificador de la nota.");
+
+  const updates: Array<[string, unknown]> = [];
+  if (body.title !== undefined) {
+    if (typeof body.title !== "string" || !body.title.trim()) {
+      return invalidRequest("El título de la nota es obligatorio.");
+    }
+    updates.push(["title", body.title.trim()]);
+  }
+  if (body.content !== undefined) {
+    if (typeof body.content !== "string") return invalidRequest("El contenido no es válido.");
+    updates.push(["content", body.content]);
+  }
+  if (body.links !== undefined) {
+    if (!Array.isArray(body.links) || !body.links.every((link) => typeof link === "string")) {
+      return invalidRequest("Los enlaces de la nota no son válidos.");
+    }
+    updates.push(["links", JSON.stringify(body.links)]);
+  }
+  if (updates.length === 0) return invalidRequest("No hay cambios para guardar.");
+
+  const values: unknown[] = [auth.user.id, body.id];
+  const assignments = updates.map(([key, value]) => {
+    values.push(value);
+    const placeholder = `$${values.length}`;
+    return `${key} = ${key === "links" ? `${placeholder}::jsonb` : placeholder}`;
+  });
+  values.push(new Date().toISOString());
+  assignments.push(`updated_at = $${values.length}`);
+  const { rows } = await query<Note>(
+    `UPDATE notes SET ${assignments.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
+    values
+  );
+  if (!rows[0]) return notFound("La nota no existe.");
+  return NextResponse.json(rows[0]);
+}
+
+export async function DELETE(request: Request) {
+  const auth = await authenticateDataRequest();
+  if (auth.response) return auth.response;
+  const id = new URL(request.url).searchParams.get("id");
+  if (!id) return invalidRequest("Falta el identificador de la nota.");
+
+  await query("DELETE FROM notes WHERE user_id = $1 AND id = $2", [auth.user.id, id]);
+  return new NextResponse(null, { status: 204 });
+}

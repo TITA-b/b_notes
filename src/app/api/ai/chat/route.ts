@@ -1,6 +1,9 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { NextResponse } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
+import { query } from "@/lib/db";
 import { getAuthenticatedCalendar } from "@/lib/google";
+import type { Note } from "@/types/note";
+import type { Task } from "@/types/task";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -37,7 +40,21 @@ function addOneHour(dateTime: string): string {
   return hasTimezone ? endDate : endDate.slice(0, -1);
 }
 
-export async function POST(request: NextRequest) {
+function extractWikilinks(content: string): string[] {
+  const matches = content.matchAll(/\[\[([^\]]+)\]\]/g);
+  return [...new Set([...matches].map((match) => match[1].trim()).filter(Boolean))];
+}
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  if (typeof value !== "object" || value === null) return false;
+  const message = value as Record<string, unknown>;
+  return (
+    (message.role === "user" || message.role === "assistant") &&
+    typeof message.content === "string"
+  );
+}
+
+export async function POST(request: Request) {
   try {
     const webhookUrl = process.env.N8N_WEBHOOK_URL;
     if (!webhookUrl) {
@@ -47,23 +64,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
+    const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
 
-    const { data: areaRows, error: areasError } = await supabase
-      .from("areas")
-      .select("slug, name")
-      .eq("user_id", user.id)
-      .order("position", { ascending: true });
-
-    if (areasError) throw new Error(areasError.message);
-    const availableAreas = (areaRows ?? []) as AvailableArea[];
+    const { rows: availableAreas } = await query<AvailableArea>(
+      "SELECT slug, name FROM areas WHERE user_id = $1 ORDER BY position ASC",
+      [user.id]
+    );
     if (availableAreas.length === 0) {
       return NextResponse.json(
         { error: "No hay áreas configuradas para esta cuenta." },
@@ -71,9 +80,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
-    const messages: ChatMessage[] = Array.isArray(body.messages)
-      ? body.messages.slice(-12)
+    const body = (await request.json()) as Record<string, unknown>;
+    const messages = Array.isArray(body.messages)
+      ? body.messages.filter(isChatMessage).slice(-12)
       : [];
     const requestedActiveArea =
       typeof body.activeArea === "string" ? body.activeArea.toLowerCase() : "";
@@ -81,27 +90,30 @@ export async function POST(request: NextRequest) {
       availableAreas.find(
         (area) => area.slug.toLowerCase() === requestedActiveArea
       )?.slug ?? availableAreas[0].slug;
-    const activeNoteId: string | null = body.activeNoteId ?? null;
-    const audioBase64: string | null = body.audioBase64 ?? null;
-    const audioMimeType: string | null = body.audioMimeType ?? null;
+    const activeNoteId =
+      typeof body.activeNoteId === "string" ? body.activeNoteId : null;
+    const audioBase64 =
+      typeof body.audioBase64 === "string" ? body.audioBase64 : null;
+    const audioMimeType =
+      typeof body.audioMimeType === "string" ? body.audioMimeType : null;
 
-    // 1. Traer notas del área actual
-    const { data: notes } = await supabase
-      .from("notes")
-      .select("id, title, content, updated_at")
-      .eq("area", activeArea)
-      .order("updated_at", { ascending: false })
-      .limit(12);
+    const { rows: notes } = await query<
+      Pick<Note, "id" | "title" | "content" | "updated_at">
+    >(
+      `SELECT id, title, content, updated_at FROM notes
+       WHERE user_id = $1 AND area = $2
+       ORDER BY updated_at DESC LIMIT 12`,
+      [user.id, activeArea]
+    );
+    const { rows: tasks } = await query<
+      Pick<Task, "area" | "title" | "due_date" | "completed">
+    >(
+      `SELECT area, title, due_date, completed FROM tasks
+       WHERE user_id = $1 AND completed = false
+       ORDER BY due_date ASC NULLS LAST LIMIT 20`,
+      [user.id]
+    );
 
-    // 2. Traer tareas pendientes de todas las áreas
-    const { data: tasks } = await supabase
-      .from("tasks")
-      .select("area, title, due_date, completed")
-      .eq("completed", false)
-      .order("due_date", { ascending: true, nullsFirst: false })
-      .limit(20);
-
-    // 3. Traer próximos eventos de Google Calendar
     let calendarSummary = "Google Calendar no conectado.";
     try {
       const calendar = await getAuthenticatedCalendar();
@@ -119,9 +131,9 @@ export async function POST(request: NextRequest) {
             ? "Sin eventos próximos en Google Calendar."
             : items
                 .map(
-                  (ev) =>
-                    `- ${ev.summary ?? "Sin título"} (${
-                      ev.start?.dateTime ?? ev.start?.date ?? ""
+                  (event) =>
+                    `- ${event.summary ?? "Sin título"} (${
+                      event.start?.dateTime ?? event.start?.date ?? ""
                     })`
                 )
                 .join("\n");
@@ -131,36 +143,31 @@ export async function POST(request: NextRequest) {
     }
 
     const notesContext =
-      notes && notes.length > 0
+      notes.length > 0
         ? notes
-            .map((n) => {
+            .map((note) => {
               const isCurrent =
-                n.id === activeNoteId ? " [NOTA ABIERTA ACTUALMENTE]" : "";
-              return `### ${n.title}${isCurrent}\n${n.content.slice(0, 2500)}`;
+                note.id === activeNoteId ? " [NOTA ABIERTA ACTUALMENTE]" : "";
+              return `### ${note.title}${isCurrent}\n${note.content.slice(0, 2500)}`;
             })
             .join("\n\n---\n\n")
         : "No hay notas guardadas en esta área todavía.";
-
     const tasksContext =
-      tasks && tasks.length > 0
+      tasks.length > 0
         ? tasks
-            .map(
-              (t) => {
-                const areaName =
-                  availableAreas.find((area) => area.slug === t.area)?.name ??
-                  t.area;
-                return `- [${areaName}] ${t.title}${
-                  t.due_date ? ` (Vence: ${t.due_date})` : ""
-                }`;
-              }
-            )
+            .map((task) => {
+              const areaName =
+                availableAreas.find((area) => area.slug === task.area)?.name ??
+                task.area;
+              return `- [${areaName}] ${task.title}${
+                task.due_date ? ` (Vence: ${task.due_date})` : ""
+              }`;
+            })
             .join("\n")
         : "No hay tareas pendientes.";
-
     const lastUserMessage =
       messages.length > 0 ? messages[messages.length - 1].content : "";
 
-    // Enviar payload estructurado al Webhook de n8n
     const n8nResponse = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -211,7 +218,6 @@ export async function POST(request: NextRequest) {
       data.output ??
       data.text ??
       (typeof data === "string" ? data : null);
-
     if (!reply) {
       return NextResponse.json(
         { error: "n8n respondió sin un campo 'reply' válido." },
@@ -219,12 +225,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Ejecutar acciones solicitadas por el agente en Supabase
-    const actions: AiAction[] = Array.isArray(data.actions) ? data.actions : [];
+    const actions: AiAction[] = Array.isArray(data.actions)
+      ? data.actions
+      : [];
     const executedActions: string[] = [];
-    const createdNotes = [];
-    const createdTasks = [];
-    let updatedNote = null;
+    const createdNotes: Note[] = [];
+    const createdTasks: Task[] = [];
+    let updatedNote: Note | null = null;
 
     for (const action of actions) {
       const requestedArea = action.area?.trim().toLowerCase();
@@ -236,62 +243,53 @@ export async function POST(request: NextRequest) {
         )?.slug ?? activeArea;
 
       if (action.type === "create_task" && action.title) {
-        const { data: newTask, error } = await supabase
-          .from("tasks")
-          .insert({
-            user_id: user.id,
-            area: targetArea,
-            title: action.title.trim(),
-            due_date: action.due_date || null,
-            completed: false,
-          })
-          .select("*")
-          .single();
-
-        if (!error && newTask) {
-          createdTasks.push(newTask);
-          executedActions.push(`Tarea creada: "${action.title}" (${targetArea})`);
-        }
+        const { rows } = await query<Task>(
+          `INSERT INTO tasks (user_id, area, title, due_date, completed)
+           VALUES ($1, $2, $3, $4, false) RETURNING *`,
+          [
+            user.id,
+            targetArea,
+            action.title.trim(),
+            action.due_date || null,
+          ]
+        );
+        createdTasks.push(rows[0]);
+        executedActions.push(`Tarea creada: "${action.title}" (${targetArea})`);
       } else if (action.type === "create_note" && action.title) {
-        const { data: newNote, error } = await supabase
-          .from("notes")
-          .insert({
-            user_id: user.id,
-            area: targetArea,
-            title: action.title.trim(),
-            content: action.content ?? "",
-          })
-          .select("*")
-          .single();
-
-        if (!error && newNote) {
-          createdNotes.push(newNote);
-          executedActions.push(`Nota creada: "${action.title}" (${targetArea})`);
-        }
+        const content = action.content ?? "";
+        const { rows } = await query<Note>(
+          `INSERT INTO notes (user_id, area, title, content, links)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [
+            user.id,
+            targetArea,
+            action.title.trim(),
+            content,
+            JSON.stringify(extractWikilinks(content)),
+          ]
+        );
+        createdNotes.push(rows[0]);
+        executedActions.push(`Nota creada: "${action.title}" (${targetArea})`);
       } else if (
         action.type === "append_to_active_note" &&
         activeNoteId &&
         action.content
       ) {
-        const { data: currentNote } = await supabase
-          .from("notes")
-          .select("content")
-          .eq("id", activeNoteId)
-          .single();
-
+        const { rows: currentRows } = await query<{ content: string }>(
+          "SELECT content FROM notes WHERE user_id = $1 AND id = $2",
+          [user.id, activeNoteId]
+        );
+        const currentNote = currentRows[0];
         if (currentNote) {
           const separator = currentNote.content.trim() ? "\n\n" : "";
-          const { data: modNote, error } = await supabase
-            .from("notes")
-            .update({
-              content: `${currentNote.content}${separator}${action.content}`,
-            })
-            .eq("id", activeNoteId)
-            .select("*")
-            .single();
-
-          if (!error && modNote) {
-            updatedNote = modNote;
+          const content = `${currentNote.content}${separator}${action.content}`;
+          const { rows } = await query<Note>(
+            `UPDATE notes SET content = $1, links = $2, updated_at = now()
+             WHERE user_id = $3 AND id = $4 RETURNING *`,
+            [content, JSON.stringify(extractWikilinks(content)), user.id, activeNoteId]
+          );
+          if (rows[0]) {
+            updatedNote = rows[0];
             executedActions.push("Contenido agregado a la nota abierta");
           }
         }
@@ -323,7 +321,6 @@ export async function POST(request: NextRequest) {
             },
           },
         });
-
         executedActions.push(
           `Evento creado: "${action.title}" (${createdEvent.data.id ?? "Google Calendar"})`
         );
@@ -338,9 +335,9 @@ export async function POST(request: NextRequest) {
       createdTasks,
       updatedNote,
     });
-  } catch (err) {
+  } catch (error) {
     const message =
-      err instanceof Error ? err.message : "Error conectando con n8n";
+      error instanceof Error ? error.message : "Error conectando con n8n";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
