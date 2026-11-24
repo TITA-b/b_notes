@@ -23,12 +23,15 @@ import { GlobalSearchModal } from "@/components/GlobalSearchModal";
 import { QuickCaptureModal } from "@/components/QuickCaptureModal";
 import { TemplateManagerModal } from "@/components/TemplateManagerModal";
 import { getAreas } from "@/services/areasService";
+import { clearServiceWorkerRuntimeCache } from "@/services/offlineCache";
 import { getNoteTemplatesForArea } from "@/lib/noteTemplates";
 import { getTemplates } from "@/services/templatesService";
 import {
+  clearOfflineCache,
   createNote,
   deleteNote,
   findOrCreateNoteByTitle,
+  getAllNotes,
   getNotesByArea,
   updateNote,
 } from "@/services/notesService";
@@ -317,8 +320,66 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   ]);
 
   useEffect(() => {
+    let cancelled = false;
     const handleOffline = () => setIsOffline(true);
-    const handleOnline = () => setIsOffline(false);
+    const handleOnline = () => {
+      setIsOffline(false);
+      clearOfflineCache();
+      clearServiceWorkerRuntimeCache();
+      setTasksRefreshKey((key) => key + 1);
+
+      getAllNotes()
+        .then((freshNotes) => {
+          if (cancelled) return;
+          const areaNotes = freshNotes.filter((note) => note.area === activeArea);
+          setNotesState({
+            area: activeArea,
+            notes: areaNotes,
+            loading: false,
+            error: null,
+          });
+          setSelectedNoteId((current) =>
+            areaNotes.some((note) => note.id === current)
+              ? current
+              : (areaNotes[0]?.id ?? null)
+          );
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setNotesState((current) =>
+            current.area === activeArea
+              ? {
+                  ...current,
+                  error:
+                    error instanceof Error
+                      ? error.message
+                      : "No se pudieron actualizar las notas.",
+                }
+              : current
+          );
+        });
+
+      getAreas()
+        .then((freshAreas) => {
+          if (cancelled) return;
+          setAreas(freshAreas);
+          setAreasError(null);
+          setActiveArea((current) =>
+            freshAreas.some((area) => area.slug === current)
+              ? current
+              : (freshAreas[0]?.slug ?? "")
+          );
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) {
+            setAreasError(
+              error instanceof Error
+                ? error.message
+                : "No se pudieron actualizar las áreas."
+            );
+          }
+        });
+    };
     const handleCachedFallback = () => setIsOffline(true);
     const initialOfflineCheck = window.setTimeout(() => {
       if (!navigator.onLine) handleOffline();
@@ -327,12 +388,13 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     window.addEventListener("online", handleOnline);
     window.addEventListener("bnotes:offline-cache", handleCachedFallback);
     return () => {
+      cancelled = true;
       window.clearTimeout(initialOfflineCheck);
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("bnotes:offline-cache", handleCachedFallback);
     };
-  }, []);
+  }, [activeArea]);
 
   useEffect(() => {
     let cancelled = false;
@@ -786,7 +848,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                             type="button"
                             aria-label="Eliminar nota"
                             onClick={() => handleDeleteNote(item.id)}
-                            className="absolute right-2 rounded p-1.5 text-zinc-600 opacity-0 transition hover:bg-zinc-800 hover:text-red-300 group-hover:opacity-100"
+                            className="absolute right-2 rounded p-1.5 text-zinc-600 opacity-100 transition hover:bg-zinc-800 hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                           >
                             <Trash2 className="size-3.5" />
                           </button>
@@ -816,6 +878,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                   onSave={handleSaveNote}
                   onOpenWikilink={handleOpenWikilink}
                   onBackMobile={closeMobileEditor}
+                  onDelete={handleDeleteNote}
                 />
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-zinc-500">

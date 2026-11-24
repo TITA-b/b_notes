@@ -893,7 +893,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                               type="button"
                               aria-label="Eliminar tarea"
                               onClick={() => handleDelete(task)}
-                              className="rounded p-1.5 text-zinc-600 opacity-0 transition hover:bg-zinc-800 hover:text-red-300 group-hover:opacity-100"
+                              className="rounded p-1.5 text-zinc-600 opacity-100 transition hover:bg-zinc-800 hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                             >
                               <Trash2 className="size-3.5" />
                             </button>
@@ -944,7 +944,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                             type="button"
                             aria-label="Eliminar tarea"
                             onClick={() => handleDelete(task)}
-                            className="rounded p-1 text-zinc-600 opacity-0 transition hover:text-red-300 group-hover:opacity-100"
+                            className="rounded p-1 text-zinc-600 opacity-100 transition hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                           >
                             <Trash2 className="size-3.5" />
                           </button>

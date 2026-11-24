@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -12,9 +12,10 @@ import {
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { clearServiceWorkerRuntimeCache } from "@/services/offlineCache";
 import { downloadAllNotesAsZip } from "@/lib/exportNotes";
 import { getAreaIcon } from "@/lib/areaIcons";
-import { getAllNotes } from "@/services/notesService";
+import { clearOfflineCache, getAllNotes } from "@/services/notesService";
 import { AreaManagerModal } from "@/components/AreaManagerModal";
 import type { Area, AreaId } from "@/types/note";
 
@@ -44,8 +45,20 @@ export function Sidebar({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
+  useEffect(() => {
+    function handleOnline() {
+      clearOfflineCache();
+      clearServiceWorkerRuntimeCache();
+    }
+
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, []);
+
   async function signOut() {
     setSigningOut(true);
+    clearOfflineCache();
+    clearServiceWorkerRuntimeCache();
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");

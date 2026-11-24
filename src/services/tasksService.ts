@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { AreaId } from "@/types/note";
 import type { Task, TaskAttachment } from "@/types/task";
 import {
+  clearOfflineCacheStorage,
   isNetworkFailure,
   notifyOfflineCacheUsed,
   readOfflineCache,
@@ -9,6 +10,10 @@ import {
 } from "@/services/offlineCache";
 
 const TASKS_CACHE_KEY = "bnotes_cache_tasks";
+
+export function clearOfflineCache(): void {
+  clearOfflineCacheStorage();
+}
 
 export async function getTasksByArea(area: AreaId): Promise<Task[]> {
   const supabase = createClient();

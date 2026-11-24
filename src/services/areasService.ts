@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import type { Area } from "@/types/note";
 import {
+  clearOfflineCacheStorage,
   isNetworkFailure,
   notifyOfflineCacheUsed,
   readOfflineCache,
@@ -8,6 +9,10 @@ import {
 } from "@/services/offlineCache";
 
 const AREAS_CACHE_KEY = "bnotes_cache_areas";
+
+export function clearOfflineCache(): void {
+  clearOfflineCacheStorage();
+}
 
 const DEFAULT_AREAS = [
   {

@@ -37,6 +37,7 @@ import {
   Maximize2,
   Paperclip,
   Play,
+  Trash2,
 } from "lucide-react";
 import {
   findOrCreateNoteByTitle,
@@ -61,6 +62,7 @@ interface NoteEditorProps {
   onSave: (id: string, updates: { title?: string; content?: string }) => Promise<Note>;
   onOpenWikilink: (title: string) => void;
   onBackMobile: () => void;
+  onDelete?: (id: string) => Promise<void>;
 }
 
 interface DriveUploadResponse {
@@ -274,6 +276,7 @@ export function NoteEditor({
   onSave,
   onOpenWikilink,
   onBackMobile,
+  onDelete,
 }: NoteEditorProps) {
   const [title, setTitle] = useState(note.title);
   const [liveLinks, setLiveLinks] = useState<string[]>(note.links ?? []);
@@ -288,6 +291,7 @@ export function NoteEditor({
     message: string;
   } | null>(null);
   const [status, setStatus] = useState<"saved" | "saving">("saved");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNoteId = useRef(note.id);
   const openWikilinkRef = useRef(onOpenWikilink);
@@ -791,6 +795,19 @@ TaskItem.configure({
     });
   }
 
+  async function handleDeleteNote() {
+    if (!onDelete || !window.confirm("¿Eliminar esta nota?")) return;
+    setDeleteError(null);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    try {
+      await onDelete(note.id);
+    } catch (error: unknown) {
+      setDeleteError(
+        error instanceof Error ? error.message : "No se pudo eliminar la nota."
+      );
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/80 px-4 py-2.5 md:px-8">
@@ -875,6 +892,18 @@ TaskItem.configure({
         </div>
 
         <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+          {onDelete ? (
+            <button
+              type="button"
+              title="Eliminar nota"
+              aria-label="Eliminar nota"
+              disabled={status === "saving"}
+              onClick={() => void handleDeleteNote()}
+              className="rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-900 hover:text-red-300 disabled:opacity-50"
+            >
+              <Trash2 className="size-3.5" />
+            </button>
+          ) : null}
           <button
             type="button"
             title="Descargar nota como Markdown"
@@ -899,6 +928,14 @@ TaskItem.configure({
         </div>
       </div>
 
+      {deleteError ? (
+        <p
+          role="alert"
+          className="border-b border-red-900/70 bg-red-950/30 px-5 py-2 text-xs text-red-200 md:px-10"
+        >
+          {deleteError}
+        </p>
+      ) : null}
       {uploadError ? (
         <p
           role="alert"

@@ -1,3 +1,41 @@
+const OFFLINE_CACHE_KEYS = [
+  "bnotes_cache_notes",
+  "bnotes_cache_tasks",
+  "bnotes_cache_areas",
+] as const;
+
+export function clearOfflineCacheStorage(): void {
+  if (typeof window === "undefined") return;
+
+  for (const key of OFFLINE_CACHE_KEYS) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch (error) {
+      console.error(`Could not clear offline cache ${key}.`, error);
+    }
+  }
+}
+
+export function clearServiceWorkerRuntimeCache(): void {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+    return;
+  }
+
+  const message = { type: "CLEAR_RUNTIME_CACHE" };
+  const worker = navigator.serviceWorker.controller;
+  if (worker) {
+    worker.postMessage(message);
+    return;
+  }
+
+  void navigator.serviceWorker
+    .getRegistration()
+    .then((registration) => registration?.active?.postMessage(message))
+    .catch((error: unknown) => {
+      console.error("Could not notify the service worker to clear its runtime cache.", error);
+    });
+}
+
 export function readOfflineCache<T>(key: string): T[] | null {
   if (typeof window === "undefined") return null;
 

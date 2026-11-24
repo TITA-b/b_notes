@@ -1,10 +1,12 @@
-const CACHE_NAME = "bnotes-shell-v1";
+const SHELL_CACHE = "bnotes-shell-v2";
+const RUNTIME_CACHE = "bnotes-runtime-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon", "/apple-icon"];
+const CURRENT_CACHES = [SHELL_CACHE, RUNTIME_CACHE];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
-      .open(CACHE_NAME)
+      .open(SHELL_CACHE)
       .then((cache) => cache.addAll(APP_SHELL))
       .then(() => self.skipWaiting())
   );
@@ -15,10 +17,18 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((key) => key.startsWith("bnotes-shell-") && key !== CACHE_NAME)
+          .filter((key) => !CURRENT_CACHES.includes(key))
           .map((key) => caches.delete(key))
       )
     ).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "CLEAR_RUNTIME_CACHE") return;
+
+  event.waitUntil(
+    caches.delete(RUNTIME_CACHE)
   );
 });
 
@@ -38,17 +48,18 @@ self.addEventListener("fetch", (event) => {
         if (response.ok) {
           const responseToCache = response.clone();
           await caches
-            .open(CACHE_NAME)
+            .open(RUNTIME_CACHE)
             .then((cache) => cache.put(event.request, responseToCache));
         }
         return response;
       })
       .catch(async () => {
-        const cache = await caches.open(CACHE_NAME);
-        const cached = await cache.match(event.request);
+        const runtimeCache = await caches.open(RUNTIME_CACHE);
+        const cached = await runtimeCache.match(event.request);
         if (cached) return cached;
         if (isNavigation) {
-          const appShell = await cache.match("/");
+          const shellCache = await caches.open(SHELL_CACHE);
+          const appShell = await shellCache.match("/");
           if (appShell) return appShell;
         }
         return Response.error();

@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import type { AreaId, Note } from "@/types/note";
 import {
+  clearOfflineCacheStorage,
   isNetworkFailure,
   notifyOfflineCacheUsed,
   readOfflineCache,
@@ -8,6 +9,10 @@ import {
 } from "@/services/offlineCache";
 
 const NOTES_CACHE_KEY = "bnotes_cache_notes";
+
+export function clearOfflineCache(): void {
+  clearOfflineCacheStorage();
+}
 
 function cacheNotes(notes: Note[], area?: AreaId): void {
   const cached = area
