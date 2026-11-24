@@ -1,5 +1,29 @@
 import { createClient } from "@/lib/supabase/client";
 import type { AreaId, Note } from "@/types/note";
+import {
+  isNetworkFailure,
+  notifyOfflineCacheUsed,
+  readOfflineCache,
+  writeOfflineCache,
+} from "@/services/offlineCache";
+
+const NOTES_CACHE_KEY = "bnotes_cache_notes";
+
+function cacheNotes(notes: Note[], area?: AreaId): void {
+  const cached = area
+    ? (readOfflineCache<Note>(NOTES_CACHE_KEY) ?? []).filter(
+        (note) => note.area !== area
+      )
+    : [];
+  writeOfflineCache(NOTES_CACHE_KEY, [...cached, ...notes]);
+}
+
+function getCachedNotes(area?: AreaId): Note[] | null {
+  const cached = readOfflineCache<Note>(NOTES_CACHE_KEY);
+  if (!cached) return null;
+  notifyOfflineCacheUsed();
+  return area ? cached.filter((note) => note.area === area) : cached;
+}
 
 function extractWikilinks(markdown: string): string[] {
   const unescaped = markdown.replace(/\\\[/g, "[").replace(/\\\]/g, "]");
@@ -23,8 +47,16 @@ export async function getNotesByArea(area: AreaId): Promise<Note[]> {
     .eq("area", area)
     .order("updated_at", { ascending: false });
 
-  if (error) throw new Error(error.message);
-  return (data ?? []) as Note[];
+  if (error) {
+    if (isNetworkFailure(error)) {
+      const cached = getCachedNotes(area);
+      if (cached) return cached;
+    }
+    throw new Error(error.message);
+  }
+  const notes = (data ?? []) as Note[];
+  cacheNotes(notes, area);
+  return notes;
 }
 
 export async function createNote(
@@ -101,6 +133,14 @@ export async function getAllNotes(): Promise<Note[]> {
     .select("*")
     .order("updated_at", { ascending: false });
 
-  if (error) throw new Error(error.message);
-  return (data ?? []) as Note[];
+  if (error) {
+    if (isNetworkFailure(error)) {
+      const cached = getCachedNotes();
+      if (cached) return cached;
+    }
+    throw new Error(error.message);
+  }
+  const notes = (data ?? []) as Note[];
+  cacheNotes(notes);
+  return notes;
 }

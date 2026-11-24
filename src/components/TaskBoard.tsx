@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element -- media previews are served by the authenticated Drive proxy. */
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   Calendar,
   CalendarPlus,
@@ -43,6 +43,8 @@ import {
 interface TaskBoardProps {
   area: AreaId;
   areaName: string;
+  closeLightboxSignal: number;
+  onLightboxChange: (open: boolean) => void;
 }
 
 interface GCalEvent {
@@ -204,7 +206,12 @@ function isOverdue(
   return new Date(iso).getTime() < currentTime;
 }
 
-export function TaskBoard({ area, areaName }: TaskBoardProps) {
+export function TaskBoard({
+  area,
+  areaName,
+  closeLightboxSignal,
+  onLightboxChange,
+}: TaskBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadedArea, setLoadedArea] = useState<AreaId | null>(null);
   const [title, setTitle] = useState("");
@@ -225,6 +232,7 @@ export function TaskBoard({ area, areaName }: TaskBoardProps) {
   const [driveError, setDriveError] = useState<string | null>(null);
   const [driveNeedsReconnect, setDriveNeedsReconnect] = useState(false);
   const [activeMedia, setActiveMedia] = useState<LightboxMedia | null>(null);
+  const previousCloseSignal = useRef(closeLightboxSignal);
   const [currentTime, setCurrentTime] = useState<number | null>(null);
 
   useEffect(() => {
@@ -239,8 +247,22 @@ export function TaskBoard({ area, areaName }: TaskBoardProps) {
 
   function handlePreviewAttachment(attachment: TaskAttachment) {
     const media = getAttachmentMedia(attachment);
-    if (media) setActiveMedia(media);
+    if (media) {
+      setActiveMedia(media);
+      onLightboxChange(true);
+    }
   }
+
+  function closeLightbox() {
+    setActiveMedia(null);
+    onLightboxChange(false);
+  }
+
+  useEffect(() => {
+    if (previousCloseSignal.current === closeLightboxSignal) return;
+    previousCloseSignal.current = closeLightboxSignal;
+    setActiveMedia(null);
+  }, [closeLightboxSignal]);
 
   // Estado de Google Calendar
   const [gcalConnected, setGcalConnected] = useState(false);
@@ -606,9 +628,9 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
   const completedTasks = tasks.filter((t) => t.completed);
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
       {/* Columna izquierda: Entregas y tareas del área */}
-      <div className="flex-1 overflow-y-auto px-5 py-6 md:px-8">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 md:px-8">
         <div>
           <h2 className="text-xl font-semibold tracking-tight capitalize">
             Entregas y tareas — {areaName}
@@ -951,7 +973,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
       </div>
 
       {/* Columna derecha: Agenda en vivo de Google Calendar */}
-      <aside className="w-full border-t border-zinc-800 bg-zinc-900/20 px-5 py-6 lg:w-96 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+      <aside className="w-full shrink-0 border-t border-zinc-800 bg-zinc-900/20 px-5 py-6 lg:w-96 lg:overflow-y-auto lg:border-t-0 lg:border-l">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-zinc-100">
@@ -973,7 +995,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
           ) : null}
         </div>
 
-        <div className="mt-5">
+        <div className="mt-5 max-h-72 overflow-y-auto lg:max-h-none lg:overflow-visible">
           {gcalLoading ? (
             <p className="py-8 text-center text-xs text-zinc-500">
               Verificando conexión…
@@ -1048,7 +1070,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
       </aside>
       <MediaLightboxModal
         media={activeMedia}
-        onClose={() => setActiveMedia(null)}
+        onClose={closeLightbox}
       />
     </div>
   );

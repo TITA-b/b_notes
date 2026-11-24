@@ -1,5 +1,13 @@
 import { createClient } from "@/lib/supabase/client";
 import type { Area } from "@/types/note";
+import {
+  isNetworkFailure,
+  notifyOfflineCacheUsed,
+  readOfflineCache,
+  writeOfflineCache,
+} from "@/services/offlineCache";
+
+const AREAS_CACHE_KEY = "bnotes_cache_areas";
 
 const DEFAULT_AREAS = [
   {
@@ -52,7 +60,9 @@ async function getUserAreas(
     .order("position", { ascending: true });
 
   if (error) throw new Error(error.message);
-  return (data ?? []) as Area[];
+  const areas = (data ?? []) as Area[];
+  writeOfflineCache(AREAS_CACHE_KEY, areas);
+  return areas;
 }
 
 function createSlug(name: string): string {
@@ -67,27 +77,42 @@ function createSlug(name: string): string {
 
 export async function getAreas(): Promise<Area[]> {
   const supabase = createClient();
-  const userId = await getUserId(supabase);
-  const areas = await getUserAreas(supabase, userId);
-  if (areas.length > 0) return areas;
+  try {
+    const userId = await getUserId(supabase);
+    const areas = await getUserAreas(supabase, userId);
+    if (areas.length > 0) return areas;
 
-  const { data, error } = await supabase
-    .from("areas")
-    .insert(
-      DEFAULT_AREAS.map((area, position) => ({
-        ...area,
-        user_id: userId,
-        position,
-      }))
-    )
-    .select("*")
-    .order("position", { ascending: true });
+    const { data, error } = await supabase
+      .from("areas")
+      .insert(
+        DEFAULT_AREAS.map((area, position) => ({
+          ...area,
+          user_id: userId,
+          position,
+        }))
+      )
+      .select("*")
+      .order("position", { ascending: true });
 
-  if (!error) return (data ?? []) as Area[];
+    if (!error) {
+      const seeded = (data ?? []) as Area[];
+      writeOfflineCache(AREAS_CACHE_KEY, seeded);
+      return seeded;
+    }
 
-  const seededAreas = await getUserAreas(supabase, userId);
-  if (seededAreas.length > 0) return seededAreas;
-  throw new Error(error.message);
+    const seededAreas = await getUserAreas(supabase, userId);
+    if (seededAreas.length > 0) return seededAreas;
+    throw new Error(error.message);
+  } catch (error) {
+    if (isNetworkFailure(error)) {
+      const cached = readOfflineCache<Area>(AREAS_CACHE_KEY);
+      if (cached) {
+        notifyOfflineCacheUsed();
+        return cached;
+      }
+    }
+    throw error;
+  }
 }
 
 export async function createArea(input: {

@@ -1,6 +1,14 @@
 import { createClient } from "@/lib/supabase/client";
 import type { AreaId } from "@/types/note";
 import type { Task, TaskAttachment } from "@/types/task";
+import {
+  isNetworkFailure,
+  notifyOfflineCacheUsed,
+  readOfflineCache,
+  writeOfflineCache,
+} from "@/services/offlineCache";
+
+const TASKS_CACHE_KEY = "bnotes_cache_tasks";
 
 export async function getTasksByArea(area: AreaId): Promise<Task[]> {
   const supabase = createClient();
@@ -12,8 +20,22 @@ export async function getTasksByArea(area: AreaId): Promise<Task[]> {
     .order("due_date", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: false });
 
-  if (error) throw new Error(error.message);
-  return (data ?? []) as Task[];
+  if (error) {
+    if (isNetworkFailure(error)) {
+      const cached = readOfflineCache<Task>(TASKS_CACHE_KEY);
+      if (cached) {
+        notifyOfflineCacheUsed();
+        return cached.filter((task) => task.area === area);
+      }
+    }
+    throw new Error(error.message);
+  }
+  const tasks = (data ?? []) as Task[];
+  const cached = (readOfflineCache<Task>(TASKS_CACHE_KEY) ?? []).filter(
+    (task) => task.area !== area
+  );
+  writeOfflineCache(TASKS_CACHE_KEY, [...cached, ...tasks]);
+  return tasks;
 }
 
 export async function createTask(

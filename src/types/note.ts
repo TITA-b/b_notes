@@ -21,3 +21,13 @@ export interface Note {
   created_at: string;
   updated_at: string;
 }
+
+export interface NoteTemplate {
+  id: string;
+  name: string;
+  area_slug: string | null;
+  default_title: string;
+  content: string;
+  position: number;
+  is_default?: boolean;
+}

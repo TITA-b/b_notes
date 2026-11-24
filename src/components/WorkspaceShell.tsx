@@ -6,6 +6,7 @@ import {
   ChevronDown,
   FileText,
   FilePlus2,
+  LayoutTemplate,
   Network,
   NotebookPen,
   Plus,
@@ -20,11 +21,10 @@ import { KnowledgeGraph } from "@/components/KnowledgeGraph";
 import { AiAssistantDrawer } from "@/components/AiAssistantDrawer";
 import { GlobalSearchModal } from "@/components/GlobalSearchModal";
 import { QuickCaptureModal } from "@/components/QuickCaptureModal";
+import { TemplateManagerModal } from "@/components/TemplateManagerModal";
 import { getAreas } from "@/services/areasService";
-import {
-  getNoteTemplatesForArea,
-  type NoteTemplate,
-} from "@/lib/noteTemplates";
+import { getNoteTemplatesForArea } from "@/lib/noteTemplates";
+import { getTemplates } from "@/services/templatesService";
 import {
   createNote,
   deleteNote,
@@ -32,7 +32,7 @@ import {
   getNotesByArea,
   updateNote,
 } from "@/services/notesService";
-import type { Area, AreaId, Note } from "@/types/note";
+import type { Area, AreaId, Note, NoteTemplate } from "@/types/note";
 
 interface WorkspaceShellProps {
   userEmail: string;
@@ -41,6 +41,11 @@ interface WorkspaceShellProps {
 export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [areas, setAreas] = useState<Area[]>([]);
   const [areasError, setAreasError] = useState<string | null>(null);
+  const [areaManagerOpen, setAreaManagerOpen] = useState(false);
+  const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [activeArea, setActiveArea] = useState<AreaId>("facultad");
   const [activeTab, setActiveTab] = useState<"notes" | "tasks" | "graph">(
     "notes"
@@ -57,8 +62,14 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [aiOpen, setAiOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [closeLightboxSignal, setCloseLightboxSignal] = useState(0);
+  const [isOffline, setIsOffline] = useState(false);
   const [shareCaptureError, setShareCaptureError] = useState<string | null>(null);
   const [tasksRefreshKey, setTasksRefreshKey] = useState(0);
+  const historyLayersRef = useRef<string[]>([]);
+  const skipNextPopRef = useRef(false);
+  const mobileEditingRef = useRef(mobileEditing);
   const pendingNoteId = useRef<string | null>(null);
   const templateMenuRef = useRef<HTMLDetailsElement>(null);
   const shareTargetHandledRef = useRef(false);
@@ -70,6 +81,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     notesState.area === activeArea ? notesState.error : null;
   const activeAreaInfo = areas.find((area) => area.slug === activeArea);
   const activeAreaName = activeAreaInfo?.name ?? activeArea;
+
+  useEffect(() => {
+    mobileEditingRef.current = mobileEditing;
+  }, [mobileEditing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,8 +114,224 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    getTemplates()
+      .then((loadedTemplates) => {
+        if (cancelled) return;
+        setTemplates(loadedTemplates);
+        setTemplatesError(null);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setTemplatesError(
+            error instanceof Error
+              ? error.message
+              : "No se pudieron cargar las plantillas."
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setTemplatesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const pushHistoryLayer = useCallback((layer: string) => {
+    window.history.pushState(
+      { ...(window.history.state ?? {}), bnotesLayer: layer },
+      ""
+    );
+    historyLayersRef.current.push(layer);
+  }, []);
+
+  const closeHistoryLayer = useCallback((layer: string) => {
+    if (historyLayersRef.current[historyLayersRef.current.length - 1] !== layer) {
+      return;
+    }
+    historyLayersRef.current.pop();
+    skipNextPopRef.current = true;
+    window.history.back();
+  }, []);
+
+  const drainStaleTabHistory = useCallback(() => {
+    if (historyLayersRef.current[historyLayersRef.current.length - 1] !== "tab") {
+      return;
+    }
+    historyLayersRef.current.pop();
+    skipNextPopRef.current = true;
+    window.history.back();
+  }, []);
+
+  const drainClosedModalHistory = useCallback(() => {
+    const layer = historyLayersRef.current[historyLayersRef.current.length - 1];
+    const isClosed =
+      (layer === "lightbox" && !lightboxOpen) ||
+      (layer === "quick-capture" && !quickCaptureOpen) ||
+      (layer === "global-search" && !globalSearchOpen) ||
+      (layer === "area-manager" && !areaManagerOpen) ||
+      (layer === "template-manager" && !templateManagerOpen) ||
+      (layer === "ai" && !aiOpen);
+    if (!isClosed) return;
+    historyLayersRef.current.pop();
+    skipNextPopRef.current = true;
+    window.history.back();
+  }, [
+    aiOpen,
+    areaManagerOpen,
+    globalSearchOpen,
+    lightboxOpen,
+    quickCaptureOpen,
+    templateManagerOpen,
+  ]);
+
+  const openMobileEditor = useCallback(() => {
+    if (
+      !mobileEditingRef.current &&
+      window.matchMedia("(max-width: 767px)").matches
+    ) {
+      pushHistoryLayer("mobile-edit");
+    }
+    setMobileEditing(true);
+  }, [pushHistoryLayer]);
+
+  const closeMobileEditor = useCallback(() => {
+    closeHistoryLayer("mobile-edit");
+    setMobileEditing(false);
+  }, [closeHistoryLayer]);
+
+  const selectTab = useCallback(
+    (tab: "notes" | "tasks" | "graph", preserveHistory = false) => {
+      if (tab === activeTab) return;
+      if (tab === "notes") {
+        if (!preserveHistory) closeHistoryLayer("tab");
+      } else {
+        pushHistoryLayer("tab");
+      }
+      setActiveTab(tab);
+    },
+    [activeTab, closeHistoryLayer, pushHistoryLayer]
+  );
+
+  const openGlobalSearch = useCallback(() => {
+    if (!globalSearchOpen) pushHistoryLayer("global-search");
+    setGlobalSearchOpen(true);
+  }, [globalSearchOpen, pushHistoryLayer]);
+
   const closeGlobalSearch = useCallback(() => {
+    closeHistoryLayer("global-search");
     setGlobalSearchOpen(false);
+  }, [closeHistoryLayer]);
+
+  const openTemplateManager = useCallback(() => {
+    if (!templateManagerOpen) pushHistoryLayer("template-manager");
+    setTemplateManagerOpen(true);
+  }, [pushHistoryLayer, templateManagerOpen]);
+
+  const closeTemplateManager = useCallback(() => {
+    closeHistoryLayer("template-manager");
+    setTemplateManagerOpen(false);
+  }, [closeHistoryLayer]);
+
+  useEffect(() => {
+    function handlePopState() {
+      if (skipNextPopRef.current) {
+        skipNextPopRef.current = false;
+        if (activeTab === "notes") drainStaleTabHistory();
+        drainClosedModalHistory();
+        return;
+      }
+
+      const layer = historyLayersRef.current.pop();
+      switch (layer) {
+        case "lightbox":
+          setLightboxOpen(false);
+          setCloseLightboxSignal((signal) => signal + 1);
+          return;
+        case "quick-capture":
+          setQuickCaptureOpen(false);
+          return;
+        case "global-search":
+          setGlobalSearchOpen(false);
+          return;
+        case "area-manager":
+          setAreaManagerOpen(false);
+          return;
+        case "template-manager":
+          setTemplateManagerOpen(false);
+          return;
+        case "ai":
+          setAiOpen(false);
+          return;
+        case "mobile-edit":
+          setMobileEditing(false);
+          drainStaleTabHistory();
+          drainClosedModalHistory();
+          return;
+        case "tab":
+          setActiveTab("notes");
+          drainStaleTabHistory();
+          return;
+      }
+
+      if (lightboxOpen) {
+        setLightboxOpen(false);
+        setCloseLightboxSignal((signal) => signal + 1);
+      } else if (quickCaptureOpen) {
+        setQuickCaptureOpen(false);
+      } else if (globalSearchOpen) {
+        setGlobalSearchOpen(false);
+      } else if (areaManagerOpen) {
+        setAreaManagerOpen(false);
+      } else if (templateManagerOpen) {
+        setTemplateManagerOpen(false);
+      } else if (aiOpen) {
+        setAiOpen(false);
+      } else if (
+        activeTab === "notes" &&
+        mobileEditing &&
+        window.matchMedia("(max-width: 767px)").matches
+      ) {
+        setMobileEditing(false);
+      } else if (activeTab !== "notes") {
+        setActiveTab("notes");
+      }
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [
+    activeTab,
+    aiOpen,
+    areaManagerOpen,
+    globalSearchOpen,
+    lightboxOpen,
+    mobileEditing,
+    quickCaptureOpen,
+    templateManagerOpen,
+    drainStaleTabHistory,
+    drainClosedModalHistory,
+  ]);
+
+  useEffect(() => {
+    const handleOffline = () => setIsOffline(true);
+    const handleOnline = () => setIsOffline(false);
+    const handleCachedFallback = () => setIsOffline(true);
+    const initialOfflineCheck = window.setTimeout(() => {
+      if (!navigator.onLine) handleOffline();
+    }, 0);
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("bnotes:offline-cache", handleCachedFallback);
+    return () => {
+      window.clearTimeout(initialOfflineCheck);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("bnotes:offline-cache", handleCachedFallback);
+    };
   }, []);
 
   useEffect(() => {
@@ -123,7 +354,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           ? data.find((note) => note.id === preferredNoteId)
           : undefined;
         setSelectedNoteId(selected?.id ?? data[0]?.id ?? null);
-        if (preferredNoteId && selected) setMobileEditing(true);
+        if (preferredNoteId && selected) openMobileEditor();
         if (!preferredNoteId) setMobileEditing(false);
       })
       .catch((error: unknown) => {
@@ -143,26 +374,26 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeArea]);
+  }, [activeArea, openMobileEditor]);
 
   useEffect(() => {
     function handleGlobalShortcut(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         if (globalSearchOpen) closeGlobalSearch();
-        else setGlobalSearchOpen(true);
+        else openGlobalSearch();
       }
     }
 
     window.addEventListener("keydown", handleGlobalShortcut);
     return () => window.removeEventListener("keydown", handleGlobalShortcut);
-  }, [closeGlobalSearch, globalSearchOpen]);
+  }, [closeGlobalSearch, globalSearchOpen, openGlobalSearch]);
 
   function handleSelectArea(area: AreaId) {
     if (area === activeArea) return;
     pendingNoteId.current = null;
     setSelectedNoteId(null);
-    setMobileEditing(false);
+    closeMobileEditor();
     setActiveArea(area);
   }
 
@@ -179,7 +410,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
     if (selectedArea && selectedArea !== activeArea) {
       setSelectedNoteId(null);
-      setMobileEditing(false);
+      closeMobileEditor();
       setActiveArea(selectedArea);
     }
   }
@@ -192,8 +423,17 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     );
   }, [activeArea]);
 
+  const handleTemplatesChanged = useCallback(
+    (updatedTemplates: NoteTemplate[]) => {
+      setTemplates(updatedTemplates);
+      setTemplatesError(null);
+      setTemplatesLoading(false);
+    },
+    []
+  );
+
   const handleSelectNote = useCallback((note: Note) => {
-    setActiveTab("notes");
+    selectTab("notes", true);
     if (note.area !== activeArea) {
       pendingNoteId.current = note.id;
       setActiveArea(note.area);
@@ -207,8 +447,15 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
       current.some((item) => item.id === note.id) ? current : [note, ...current]
     );
     setSelectedNoteId(note.id);
-    setMobileEditing(true);
-  }, [activeArea, notesState.area, notesState.loading, updateNotes]);
+    openMobileEditor();
+  }, [
+    activeArea,
+    notesState.area,
+    notesState.loading,
+    openMobileEditor,
+    selectTab,
+    updateNotes,
+  ]);
 
   useEffect(() => {
     if (areas.length === 0 || shareTargetHandledRef.current) return;
@@ -242,12 +489,12 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   async function handleCreateNote(template?: NoteTemplate) {
     const created = await createNote(
       activeArea,
-      template?.title,
+      template?.default_title,
       template?.content
     );
     updateNotes((prev) => [created, ...prev]);
     setSelectedNoteId(created.id);
-    setMobileEditing(true);
+    openMobileEditor();
     if (template) templateMenuRef.current?.removeAttribute("open");
   }
 
@@ -264,14 +511,15 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   async function handleDeleteNote(id: string) {
     await deleteNote(id);
+    const wasSelected = selectedNoteId === id;
     updateNotes((prev) => {
       const remaining = prev.filter((n) => n.id !== id);
-      if (selectedNoteId === id) {
+      if (wasSelected) {
         setSelectedNoteId(remaining[0]?.id ?? null);
-        setMobileEditing(false);
       }
       return remaining;
     });
+    if (wasSelected) closeMobileEditor();
   }
 
   async function handleOpenWikilink(linkTitle: string) {
@@ -297,6 +545,13 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
       <Sidebar
         areas={areas}
         activeArea={activeArea}
+        areaManagerOpen={areaManagerOpen}
+        onOpenTemplateManager={openTemplateManager}
+        onAreaManagerOpenChange={(open) => {
+          if (open && !areaManagerOpen) pushHistoryLayer("area-manager");
+          if (!open) closeHistoryLayer("area-manager");
+          setAreaManagerOpen(open);
+        }}
         onSelectArea={handleSelectArea}
         onAreasChanged={handleAreasChanged}
       />
@@ -307,7 +562,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/60 p-1">
             <button
               type="button"
-              onClick={() => setActiveTab("notes")}
+              onClick={() => selectTab("notes")}
               className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition sm:px-3 ${
                 activeTab === "notes"
                   ? "bg-zinc-100 text-zinc-950"
@@ -319,7 +574,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("tasks")}
+              onClick={() => selectTab("tasks")}
               className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition sm:px-3 ${
                 activeTab === "tasks"
                   ? "bg-zinc-100 text-zinc-950"
@@ -332,7 +587,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab("graph")}
+              onClick={() => selectTab("graph")}
               className={`flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition sm:px-3 ${
                 activeTab === "graph"
                   ? "bg-zinc-100 text-zinc-950"
@@ -347,7 +602,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           <div className="flex items-center gap-1 sm:gap-3">
             <button
               type="button"
-              onClick={() => setGlobalSearchOpen(true)}
+              onClick={openGlobalSearch}
               className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white sm:px-3"
             >
               <Search className="size-3.5" />
@@ -358,7 +613,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             </button>
             <button
               type="button"
-              onClick={() => setAiOpen(true)}
+              onClick={() => {
+                if (!aiOpen) pushHistoryLayer("ai");
+                setAiOpen(true);
+              }}
               className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 hover:text-white sm:px-3"
             >
               <Sparkles className="size-3.5 text-emerald-400" />
@@ -369,6 +627,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             <span className="hidden text-xs text-zinc-500 md:inline">
               {userEmail}
             </span>
+            {isOffline ? (
+              <span className="rounded-full border border-amber-800/70 bg-amber-950/40 px-2 py-1 text-[10px] font-medium text-amber-200">
+                Modo sin conexión
+              </span>
+            ) : null}
           </div>
         </header>
 
@@ -385,6 +648,12 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
               key={`${activeArea}:${tasksRefreshKey}`}
               area={activeArea}
               areaName={activeAreaName}
+              closeLightboxSignal={closeLightboxSignal}
+              onLightboxChange={(open) => {
+                if (open && !lightboxOpen) pushHistoryLayer("lightbox");
+                if (!open) closeHistoryLayer("lightbox");
+                setLightboxOpen(open);
+              }}
             />
           </div>
         ) : (
@@ -418,7 +687,17 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                       <ChevronDown className="size-3" />
                     </summary>
                     <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-zinc-800 bg-zinc-950 p-1.5 shadow-xl">
-                      {getNoteTemplatesForArea(activeArea).map((template) => (
+                      {templatesError ? (
+                        <p role="alert" className="px-3 py-2 text-[11px] text-red-300">
+                          {templatesError}
+                        </p>
+                      ) : templatesLoading ? (
+                        <p className="px-3 py-2 text-[11px] text-zinc-500">
+                          Cargando plantillas…
+                        </p>
+                      ) : (
+                        getNoteTemplatesForArea(activeArea, templates).map(
+                          (template) => (
                         <button
                           key={template.id}
                           type="button"
@@ -427,7 +706,18 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                         >
                           {template.name}
                         </button>
-                      ))}
+                          )
+                        )
+                      )}
+                      <div className="my-1 border-t border-zinc-800" />
+                      <button
+                        type="button"
+                        onClick={openTemplateManager}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100"
+                      >
+                        <LayoutTemplate className="size-3.5" />
+                        ⚙ Gestionar plantillas...
+                      </button>
                     </div>
                   </details>
                 </div>
@@ -473,7 +763,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                             type="button"
                             onClick={() => {
                               setSelectedNoteId(item.id);
-                              setMobileEditing(true);
+                              openMobileEditor();
                             }}
                             className={`flex w-full flex-col rounded-lg px-3 py-2.5 pr-9 text-left transition ${
                               isSelected
@@ -525,7 +815,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                   areas={areas}
                   onSave={handleSaveNote}
                   onOpenWikilink={handleOpenWikilink}
-                  onBackMobile={() => setMobileEditing(false)}
+                  onBackMobile={closeMobileEditor}
                 />
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-zinc-500">
@@ -544,7 +834,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
       <AiAssistantDrawer
         open={aiOpen}
-        onClose={() => setAiOpen(false)}
+        onClose={() => {
+          closeHistoryLayer("ai");
+          setAiOpen(false);
+        }}
         activeArea={activeArea}
         activeAreaName={activeAreaName}
         activeNoteId={selectedNoteId}
@@ -581,7 +874,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
       {activeTab !== "notes" || !mobileEditing ? (
         <button
           type="button"
-          onClick={() => setQuickCaptureOpen(true)}
+        onClick={() => {
+          if (!quickCaptureOpen) pushHistoryLayer("quick-capture");
+          setQuickCaptureOpen(true);
+        }}
           aria-label="Abrir captura rápida"
           title="Captura rápida"
           className="fixed bottom-5 right-5 z-30 flex size-14 items-center justify-center rounded-full bg-emerald-500 text-zinc-950 shadow-lg transition hover:bg-emerald-400 md:hidden"
@@ -594,11 +890,22 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         <QuickCaptureModal
           areas={areas}
           activeArea={activeArea}
-          onClose={() => setQuickCaptureOpen(false)}
+          onClose={() => {
+            closeHistoryLayer("quick-capture");
+            setQuickCaptureOpen(false);
+          }}
           onNoteCreated={handleSelectNote}
           onTaskCreated={() => {
             setTasksRefreshKey((key) => key + 1);
           }}
+        />
+      ) : null}
+
+      {templateManagerOpen ? (
+        <TemplateManagerModal
+          areas={areas}
+          onClose={closeTemplateManager}
+          onTemplatesChanged={handleTemplatesChanged}
         />
       ) : null}
     </div>

@@ -6,6 +6,7 @@ import {
   Activity,
   Download,
   LogOut,
+  LayoutTemplate,
   Menu,
   Settings2,
   X,
@@ -20,6 +21,9 @@ import type { Area, AreaId } from "@/types/note";
 interface SidebarProps {
   areas: Area[];
   activeArea: AreaId;
+  areaManagerOpen: boolean;
+  onAreaManagerOpenChange: (open: boolean) => void;
+  onOpenTemplateManager: () => void;
   onSelectArea: (area: AreaId) => void;
   onAreasChanged: (areas: Area[], nextActiveArea?: string) => void;
 }
@@ -27,6 +31,9 @@ interface SidebarProps {
 export function Sidebar({
   areas,
   activeArea,
+  areaManagerOpen,
+  onAreaManagerOpenChange,
+  onOpenTemplateManager,
   onSelectArea,
   onAreasChanged,
 }: SidebarProps) {
@@ -34,7 +41,6 @@ export function Sidebar({
   const [open, setOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
-  const [areaManagerOpen, setAreaManagerOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
@@ -114,13 +120,24 @@ export function Sidebar({
         <button
           type="button"
           onClick={() => {
-            setAreaManagerOpen(true);
+            onAreaManagerOpenChange(true);
             setOpen(false);
           }}
           className="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50"
         >
           <Settings2 className="size-4 text-zinc-500" />
           Gestionar áreas
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            onOpenTemplateManager();
+            setOpen(false);
+          }}
+          className="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50"
+        >
+          <LayoutTemplate className="size-4 text-zinc-500" />
+          Plantillas
         </button>
         <button
           type="button"
@@ -199,7 +216,7 @@ export function Sidebar({
         <AreaManagerModal
           areas={areas}
           activeAreaId={activeArea}
-          onClose={() => setAreaManagerOpen(false)}
+          onClose={() => onAreaManagerOpenChange(false)}
           onAreasChanged={(updatedAreas, nextActiveArea) => {
             onAreasChanged(updatedAreas, nextActiveArea);
           }}

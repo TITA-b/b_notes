@@ -98,9 +98,19 @@ export function KnowledgeGraph({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const simNodesRef = useRef<GraphNode[]>([]);
   const draggingIdRef = useRef<string | null>(null);
+  const activePointersRef = useRef(
+    new Map<number, { x: number; y: number }>()
+  );
+  const pinchStartRef = useRef<{
+    distance: number;
+    centerX: number;
+    centerY: number;
+    viewBox: typeof viewBox;
+  } | null>(null);
   const viewBoxRef = useRef(viewBox);
   const nodePointerStartRef = useRef<{
     id: string;
+    pointerId: number;
     clientX: number;
     clientY: number;
     dragged: boolean;
@@ -373,7 +383,119 @@ export function KnowledgeGraph({
     }
   }
 
+  function beginPointer(
+    e: React.PointerEvent<SVGSVGElement | SVGGElement>,
+    nodeId: string | null
+  ) {
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    e.currentTarget.setPointerCapture(e.pointerId);
+
+    if (activePointersRef.current.size >= 2 && svgRef.current) {
+      const [first, second] = Array.from(activePointersRef.current.values());
+      const rect = svgRef.current.getBoundingClientRect();
+      const current = viewBoxRef.current;
+      pinchStartRef.current = {
+        distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+        centerX: ((first.x + second.x) / 2 - rect.left) / rect.width,
+        centerY: ((first.y + second.y) / 2 - rect.top) / rect.height,
+        viewBox: { ...current },
+      };
+      panStartRef.current = null;
+      nodePointerStartRef.current = null;
+      draggingIdRef.current = null;
+      setDraggingId(null);
+      setPanning(false);
+      return;
+    }
+
+    if (nodeId) {
+      nodePointerStartRef.current = {
+        id: nodeId,
+        pointerId: e.pointerId,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        dragged: false,
+      };
+      draggingIdRef.current = nodeId;
+      setDraggingId(nodeId);
+      return;
+    }
+
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const current = viewBoxRef.current;
+    panStartRef.current = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      x: current.x,
+      y: current.y,
+      width: current.width,
+      height: current.height,
+      scaleX: current.width / rect.width,
+      scaleY: current.height / rect.height,
+    };
+    setPanning(true);
+  }
+
+  function handleCanvasPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (e.target !== e.currentTarget) return;
+    beginPointer(e, null);
+  }
+
   function handlePointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (!activePointersRef.current.has(e.pointerId)) return;
+    activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    const pinchStart = pinchStartRef.current;
+    if (pinchStart && activePointersRef.current.size >= 2 && svgRef.current) {
+      const [first, second] = Array.from(activePointersRef.current.values());
+      const rect = svgRef.current.getBoundingClientRect();
+      const distance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+      const midpointX = ((first.x + second.x) / 2 - rect.left) / rect.width;
+      const midpointY = ((first.y + second.y) / 2 - rect.top) / rect.height;
+      const zoom = distance / pinchStart.distance;
+      const width = Math.min(1800, Math.max(180, pinchStart.viewBox.width / zoom));
+      const height = Math.min(1200, Math.max(120, pinchStart.viewBox.height / zoom));
+      const anchorX =
+        pinchStart.viewBox.x + pinchStart.centerX * pinchStart.viewBox.width;
+      const anchorY =
+        pinchStart.viewBox.y + pinchStart.centerY * pinchStart.viewBox.height;
+      const nextViewBox = {
+        x: anchorX - midpointX * width,
+        y: anchorY - midpointY * height,
+        width,
+        height,
+      };
+      viewBoxRef.current = nextViewBox;
+      setViewBox(nextViewBox);
+      return;
+    }
+
+    if (activePointersRef.current.size !== 1) return;
+    const nodePointerStart = nodePointerStartRef.current;
+    if (nodePointerStart?.pointerId === e.pointerId && draggingIdRef.current) {
+      const distance = Math.hypot(
+        e.clientX - nodePointerStart.clientX,
+        e.clientY - nodePointerStart.clientY
+      );
+      if (distance > 4) nodePointerStart.dragged = true;
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const current = viewBoxRef.current;
+      const x = current.x + ((e.clientX - rect.left) / rect.width) * current.width;
+      const y = current.y + ((e.clientY - rect.top) / rect.height) * current.height;
+      const node = simNodesRef.current.find(
+        (item) => item.id === draggingIdRef.current
+      );
+      if (node) {
+        node.x = Math.max(40, Math.min(860, x));
+        node.y = Math.max(40, Math.min(560, y));
+        node.vx = 0;
+        node.vy = 0;
+      }
+      return;
+    }
+
     const panStart = panStartRef.current;
     if (panStart) {
       const nextViewBox = {
@@ -384,59 +506,31 @@ export function KnowledgeGraph({
       };
       viewBoxRef.current = nextViewBox;
       setViewBox(nextViewBox);
-      return;
     }
-    if (!draggingId || !svgRef.current) return;
+  }
+
+  function handlePointerEnd(
+    e: React.PointerEvent<SVGSVGElement>,
+    cancelled = false
+  ) {
     const nodePointerStart = nodePointerStartRef.current;
-    if (nodePointerStart) {
-      const distance = Math.hypot(
-        e.clientX - nodePointerStart.clientX,
-        e.clientY - nodePointerStart.clientY
-      );
-      if (distance > 4) nodePointerStart.dragged = true;
+    if (
+      !cancelled &&
+      activePointersRef.current.size === 1 &&
+      nodePointerStart?.pointerId === e.pointerId &&
+      !nodePointerStart.dragged
+    ) {
+      focusNode(nodePointerStart.id);
     }
-    const rect = svgRef.current.getBoundingClientRect();
-    const currentViewBox = viewBoxRef.current;
-    const x =
-      currentViewBox.x +
-      ((e.clientX - rect.left) / rect.width) * currentViewBox.width;
-    const y =
-      currentViewBox.y +
-      ((e.clientY - rect.top) / rect.height) * currentViewBox.height;
-
-    const node = simNodesRef.current.find((n) => n.id === draggingId);
-    if (node) {
-      node.x = Math.max(40, Math.min(860, x));
-      node.y = Math.max(40, Math.min(560, y));
-      node.vx = 0;
-      node.vy = 0;
-    }
-  }
-
-  function handleCanvasPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (e.target !== e.currentTarget) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const currentViewBox = viewBoxRef.current;
-    panStartRef.current = {
-      clientX: e.clientX,
-      clientY: e.clientY,
-      x: currentViewBox.x,
-      y: currentViewBox.y,
-      width: currentViewBox.width,
-      height: currentViewBox.height,
-      scaleX: currentViewBox.width / rect.width,
-      scaleY: currentViewBox.height / rect.height,
-    };
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setPanning(true);
-  }
-
-  function handlePointerEnd() {
+    activePointersRef.current.delete(e.pointerId);
+    pinchStartRef.current = null;
     panStartRef.current = null;
-    nodePointerStartRef.current = null;
-    draggingIdRef.current = null;
-    setPanning(false);
-    setDraggingId(null);
+    if (nodePointerStart?.pointerId === e.pointerId) {
+      nodePointerStartRef.current = null;
+      draggingIdRef.current = null;
+      setDraggingId(null);
+    }
+    if (activePointersRef.current.size === 0) setPanning(false);
   }
 
   function zoomBy(factor: number) {
@@ -589,7 +683,7 @@ export function KnowledgeGraph({
             onPointerDown={handleCanvasPointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerEnd}
-            onPointerCancel={handlePointerEnd}
+            onPointerCancel={(e) => handlePointerEnd(e, true)}
             onPointerLeave={() => {
               if (!panStartRef.current && !nodePointerStartRef.current) {
                 setHoveredId(null);
@@ -657,24 +751,7 @@ export function KnowledgeGraph({
                   transform={`translate(${node.x}, ${node.y})`}
                   onPointerDown={(e) => {
                     e.stopPropagation();
-                    e.currentTarget.setPointerCapture(e.pointerId);
-                    nodePointerStartRef.current = {
-                      id: node.id,
-                      clientX: e.clientX,
-                      clientY: e.clientY,
-                      dragged: false,
-                    };
-                    draggingIdRef.current = node.id;
-                    setDraggingId(node.id);
-                  }}
-                  onPointerUp={() => {
-                    const pointerStart = nodePointerStartRef.current;
-                    if (pointerStart?.id === node.id && !pointerStart.dragged) {
-                      focusNode(node.id);
-                    }
-                    nodePointerStartRef.current = null;
-                    draggingIdRef.current = null;
-                    setDraggingId(null);
+                    beginPointer(e, node.id);
                   }}
                   onDoubleClick={() => onSelectNote(node.note)}
                   onMouseEnter={() => setHoveredId(node.id)}
