@@ -19,6 +19,7 @@ import { NoteEditor } from "@/components/NoteEditor";
 import { TaskBoard } from "@/components/TaskBoard";
 import { KnowledgeGraph } from "@/components/KnowledgeGraph";
 import { AiAssistantDrawer } from "@/components/AiAssistantDrawer";
+import { ConfirmDeleteModal } from "@/components/ConfirmDeleteModal";
 import { GlobalSearchModal } from "@/components/GlobalSearchModal";
 import { QuickCaptureModal } from "@/components/QuickCaptureModal";
 import { TemplateManagerModal } from "@/components/TemplateManagerModal";
@@ -60,6 +61,9 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     error: string | null;
   }>({ area: "facultad", notes: [], loading: true, error: null });
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [notePendingDelete, setNotePendingDelete] = useState<Note | null>(null);
+  const [noteDeleteLoading, setNoteDeleteLoading] = useState(false);
+  const [noteDeleteError, setNoteDeleteError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [mobileEditing, setMobileEditing] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -169,6 +173,19 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     window.history.back();
   }, []);
 
+  const drainClosedMobileEditHistory = useCallback(() => {
+    if (
+      mobileEditingRef.current ||
+      historyLayersRef.current[historyLayersRef.current.length - 1] !==
+        "mobile-edit"
+    ) {
+      return;
+    }
+    historyLayersRef.current.pop();
+    skipNextPopRef.current = true;
+    window.history.back();
+  }, []);
+
   const drainClosedModalHistory = useCallback(() => {
     const layer = historyLayersRef.current[historyLayersRef.current.length - 1];
     const isClosed =
@@ -177,6 +194,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
       (layer === "global-search" && !globalSearchOpen) ||
       (layer === "area-manager" && !areaManagerOpen) ||
       (layer === "template-manager" && !templateManagerOpen) ||
+      (layer === "note-delete" && notePendingDelete === null) ||
       (layer === "ai" && !aiOpen);
     if (!isClosed) return;
     historyLayersRef.current.pop();
@@ -187,6 +205,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     areaManagerOpen,
     globalSearchOpen,
     lightboxOpen,
+    notePendingDelete,
     quickCaptureOpen,
     templateManagerOpen,
   ]);
@@ -205,6 +224,23 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     closeHistoryLayer("mobile-edit");
     setMobileEditing(false);
   }, [closeHistoryLayer]);
+
+  const requestNoteDelete = useCallback(
+    (note: Note) => {
+      if (notePendingDelete) return;
+      setNoteDeleteError(null);
+      setNotePendingDelete(note);
+      pushHistoryLayer("note-delete");
+    },
+    [notePendingDelete, pushHistoryLayer]
+  );
+
+  const closeNoteDelete = useCallback(() => {
+    if (noteDeleteLoading) return;
+    closeHistoryLayer("note-delete");
+    setNotePendingDelete(null);
+    setNoteDeleteError(null);
+  }, [closeHistoryLayer, noteDeleteLoading]);
 
   const selectTab = useCallback(
     (tab: "notes" | "tasks" | "graph", preserveHistory = false) => {
@@ -245,6 +281,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         skipNextPopRef.current = false;
         if (activeTab === "notes") drainStaleTabHistory();
         drainClosedModalHistory();
+        drainClosedMobileEditHistory();
         return;
       }
 
@@ -266,6 +303,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         case "template-manager":
           setTemplateManagerOpen(false);
           return;
+        case "note-delete":
+          setNotePendingDelete(null);
+          setNoteDeleteError(null);
+          return;
         case "ai":
           setAiOpen(false);
           return;
@@ -273,6 +314,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           setMobileEditing(false);
           drainStaleTabHistory();
           drainClosedModalHistory();
+          drainClosedMobileEditHistory();
           return;
         case "tab":
           setActiveTab("notes");
@@ -280,7 +322,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           return;
       }
 
-      if (lightboxOpen) {
+      if (notePendingDelete) {
+        setNotePendingDelete(null);
+        setNoteDeleteError(null);
+      } else if (lightboxOpen) {
         setLightboxOpen(false);
         setCloseLightboxSignal((signal) => signal + 1);
       } else if (quickCaptureOpen) {
@@ -314,9 +359,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     lightboxOpen,
     mobileEditing,
     quickCaptureOpen,
+    notePendingDelete,
     templateManagerOpen,
     drainStaleTabHistory,
     drainClosedModalHistory,
+    drainClosedMobileEditHistory,
   ]);
 
   useEffect(() => {
@@ -571,17 +618,33 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     return updated;
   }
 
-  async function handleDeleteNote(id: string) {
-    await deleteNote(id);
-    const wasSelected = selectedNoteId === id;
-    updateNotes((prev) => {
-      const remaining = prev.filter((n) => n.id !== id);
-      if (wasSelected) {
-        setSelectedNoteId(remaining[0]?.id ?? null);
+  async function confirmNoteDelete() {
+    const note = notePendingDelete;
+    if (!note) return;
+
+    setNoteDeleteLoading(true);
+    setNoteDeleteError(null);
+    try {
+      await deleteNote(note.id);
+      const wasSelected = selectedNoteId === note.id;
+      updateNotes((prev) => {
+        const remaining = prev.filter((item) => item.id !== note.id);
+        if (wasSelected) setSelectedNoteId(remaining[0]?.id ?? null);
+        return remaining;
+      });
+      if (wasSelected && mobileEditing) {
+        mobileEditingRef.current = false;
+        setMobileEditing(false);
       }
-      return remaining;
-    });
-    if (wasSelected) closeMobileEditor();
+      closeHistoryLayer("note-delete");
+      setNotePendingDelete(null);
+    } catch (error: unknown) {
+      setNoteDeleteError(
+        error instanceof Error ? error.message : "No se pudo eliminar la nota."
+      );
+    } finally {
+      setNoteDeleteLoading(false);
+    }
   }
 
   async function handleOpenWikilink(linkTitle: string) {
@@ -847,7 +910,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                           <button
                             type="button"
                             aria-label="Eliminar nota"
-                            onClick={() => handleDeleteNote(item.id)}
+                            onClick={() => requestNoteDelete(item)}
                             className="absolute right-2 rounded p-1.5 text-zinc-600 opacity-100 transition hover:bg-zinc-800 hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                           >
                             <Trash2 className="size-3.5" />
@@ -878,7 +941,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                   onSave={handleSaveNote}
                   onOpenWikilink={handleOpenWikilink}
                   onBackMobile={closeMobileEditor}
-                  onDelete={handleDeleteNote}
+                  onRequestDelete={requestNoteDelete}
                 />
               ) : (
                 <div className="flex flex-1 flex-col items-center justify-center p-8 text-center text-zinc-500">
@@ -971,6 +1034,19 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           onTemplatesChanged={handleTemplatesChanged}
         />
       ) : null}
+
+      <ConfirmDeleteModal
+        open={notePendingDelete !== null}
+        title={`¿Eliminar «${notePendingDelete?.title.trim() || "Sin título"}»?`}
+        description={
+          noteDeleteError
+            ? `${noteDeleteError} Esta acción no se puede deshacer.`
+            : "Esta acción no se puede deshacer."
+        }
+        loading={noteDeleteLoading}
+        onConfirm={confirmNoteDelete}
+        onClose={closeNoteDelete}
+      />
     </div>
   );
 }

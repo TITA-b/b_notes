@@ -19,6 +19,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { ConfirmDeleteModal } from "@/components/ConfirmDeleteModal";
 import {
   createTask,
   deleteTask,
@@ -231,6 +232,9 @@ export function TaskBoard({
   const [deletingAttachmentId, setDeletingAttachmentId] = useState<string | null>(null);
   const [driveError, setDriveError] = useState<string | null>(null);
   const [driveNeedsReconnect, setDriveNeedsReconnect] = useState(false);
+  const [taskPendingDelete, setTaskPendingDelete] = useState<Task | null>(null);
+  const [taskDeleteLoading, setTaskDeleteLoading] = useState(false);
+  const [taskDeleteError, setTaskDeleteError] = useState<string | null>(null);
   const [activeMedia, setActiveMedia] = useState<LightboxMedia | null>(null);
   const previousCloseSignal = useRef(closeLightboxSignal);
   const [currentTime, setCurrentTime] = useState<number | null>(null);
@@ -574,10 +578,9 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
             ? error.message
             : "No se pudieron eliminar los adjuntos de Drive."
         );
-        return;
+        throw error;
       }
     }
-    setTasks((prev) => prev.filter((t) => t.id !== task.id));
 
     if (task.gcal_event_id) {
       const res = await fetch(
@@ -592,6 +595,32 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
     }
 
     await deleteTask(task.id);
+    setTasks((prev) => prev.filter((item) => item.id !== task.id));
+  }
+
+  async function confirmTaskDelete() {
+    const task = taskPendingDelete;
+    if (!task) return;
+
+    setTaskDeleteLoading(true);
+    setTaskDeleteError(null);
+    setTaskError(null);
+    try {
+      await handleDelete(task);
+      setTaskPendingDelete(null);
+    } catch (error: unknown) {
+      setTaskDeleteError(
+        error instanceof Error ? error.message : "No se pudo eliminar la tarea."
+      );
+    } finally {
+      setTaskDeleteLoading(false);
+    }
+  }
+
+  function requestTaskDelete(task: Task) {
+    setTaskDeleteError(null);
+    setTaskError(null);
+    setTaskPendingDelete(task);
   }
 
   async function handleSyncToGCal(task: Task) {
@@ -892,7 +921,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                             <button
                               type="button"
                               aria-label="Eliminar tarea"
-                              onClick={() => handleDelete(task)}
+                              onClick={() => requestTaskDelete(task)}
                               className="rounded p-1.5 text-zinc-600 opacity-100 transition hover:bg-zinc-800 hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                             >
                               <Trash2 className="size-3.5" />
@@ -943,7 +972,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                           <button
                             type="button"
                             aria-label="Eliminar tarea"
-                            onClick={() => handleDelete(task)}
+                            onClick={() => requestTaskDelete(task)}
                             className="rounded p-1 text-zinc-600 opacity-100 transition hover:text-red-300 md:opacity-0 md:group-hover:opacity-100"
                           >
                             <Trash2 className="size-3.5" />
@@ -1071,6 +1100,24 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
       <MediaLightboxModal
         media={activeMedia}
         onClose={closeLightbox}
+      />
+      <ConfirmDeleteModal
+        open={taskPendingDelete !== null}
+        title={`¿Eliminar «${taskPendingDelete?.title || "Sin título"}»?`}
+        description={
+          taskDeleteError
+            ? `${taskDeleteError} Esta acción no se puede deshacer.`
+            : taskPendingDelete?.gcal_event_id
+              ? "También se eliminará el evento vinculado en Google Calendar y sus adjuntos. Esta acción no se puede deshacer."
+              : "No hay un evento vinculado en Google Calendar. Se eliminará la tarea y sus adjuntos; esta acción no se puede deshacer."
+        }
+        loading={taskDeleteLoading}
+        onConfirm={confirmTaskDelete}
+        onClose={() => {
+          if (taskDeleteLoading) return;
+          setTaskPendingDelete(null);
+          setTaskDeleteError(null);
+        }}
       />
     </div>
   );
