@@ -6,8 +6,13 @@ import {
   isNetworkFailure,
   notifyOfflineCacheUsed,
   readOfflineCache,
+  upsertOfflineCacheItem,
   writeOfflineCache,
 } from "@/services/offlineCache";
+import {
+  enqueueOfflineMutation,
+  getPendingOfflineLocalIds,
+} from "@/services/offlineSync";
 
 const TASKS_CACHE_KEY = "bnotes_cache_tasks";
 
@@ -68,11 +73,20 @@ export async function getTasksByArea(area: AreaId): Promise<Task[]> {
         `/api/data/tasks?area=${encodeURIComponent(area)}`
       )
     );
-    const cached = (readOfflineCache<unknown>(TASKS_CACHE_KEY) ?? [])
-      .filter(isTask)
-      .filter((task) => task.area !== area);
-    writeOfflineCache(TASKS_CACHE_KEY, [...cached, ...tasks]);
-    return tasks;
+    const allCached = (readOfflineCache<unknown>(TASKS_CACHE_KEY) ?? []).filter(
+      isTask
+    );
+    const cached = allCached.filter((task) => task.area !== area);
+    const pendingIds = getPendingOfflineLocalIds(TASKS_CACHE_KEY);
+    const pendingLocalTasks = allCached
+      .filter((task) => pendingIds.has(task.id))
+      .filter((task) => task.area === area);
+    const mergedTasks = [
+      ...pendingLocalTasks,
+      ...tasks.filter((task) => !pendingIds.has(task.id)),
+    ];
+    writeOfflineCache(TASKS_CACHE_KEY, [...cached, ...mergedTasks]);
+    return mergedTasks;
   } catch (error) {
     if (isNetworkFailure(error)) {
       const cached = readOfflineCache<unknown>(TASKS_CACHE_KEY);
@@ -91,19 +105,49 @@ export async function createTask(
   dueDate?: string | null,
   attachments: TaskAttachment[] = []
 ): Promise<Task> {
-  return requireTask(
-    await apiRequest<unknown>("/api/data/tasks", {
+  const body = jsonBody({
+    area,
+    title: title.trim(),
+    due_date: dueDate ? new Date(dueDate).toISOString() : null,
+    completed: false,
+    sync_to_gcal: false,
+    attachments,
+  });
+  try {
+    const created = requireTask(
+      await apiRequest<unknown>("/api/data/tasks", {
+        method: "POST",
+        body,
+      })
+    );
+    upsertOfflineCacheItem(TASKS_CACHE_KEY, created);
+    return created;
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    const cached = readOfflineCache<unknown>(TASKS_CACHE_KEY) ?? [];
+    const existing = cached.find(isTask);
+    const created: Task = {
+      id: `offline-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      user_id: existing?.user_id ?? "offline",
+      area,
+      title: title.trim(),
+      due_date: dueDate ? new Date(dueDate).toISOString() : null,
+      completed: false,
+      sync_to_gcal: false,
+      gcal_event_id: null,
+      created_at: new Date().toISOString(),
+      attachments,
+    };
+    enqueueOfflineMutation({
+      path: "/api/data/tasks",
       method: "POST",
-      body: jsonBody({
-        area,
-        title: title.trim(),
-        due_date: dueDate ? new Date(dueDate).toISOString() : null,
-        completed: false,
-        sync_to_gcal: false,
-        attachments,
-      }),
-    })
-  );
+      body,
+      cacheKey: TASKS_CACHE_KEY,
+      localId: created.id,
+    });
+    upsertOfflineCacheItem(TASKS_CACHE_KEY, created);
+    return created;
+  }
 }
 
 export async function updateTask(

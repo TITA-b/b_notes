@@ -24,11 +24,9 @@ import { GlobalSearchModal } from "@/components/GlobalSearchModal";
 import { QuickCaptureModal } from "@/components/QuickCaptureModal";
 import { TemplateManagerModal } from "@/components/TemplateManagerModal";
 import { getAreas } from "@/services/areasService";
-import { clearServiceWorkerRuntimeCache } from "@/services/offlineCache";
 import { getNoteTemplatesForArea } from "@/lib/noteTemplates";
 import { getTemplates } from "@/services/templatesService";
 import {
-  clearOfflineCache,
   createNote,
   deleteNote,
   findOrCreateNoteByTitle,
@@ -36,6 +34,12 @@ import {
   getNotesByArea,
   updateNote,
 } from "@/services/notesService";
+import {
+  getPendingOfflineMutationCount,
+  setOfflineSyncScope,
+  syncPendingOfflineMutations,
+  type OfflineSyncStatus,
+} from "@/services/offlineSync";
 import type { Area, AreaId, Note, NoteTemplate } from "@/types/note";
 
 interface WorkspaceShellProps {
@@ -72,13 +76,16 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [closeLightboxSignal, setCloseLightboxSignal] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<OfflineSyncStatus>("idle");
   const [shareCaptureError, setShareCaptureError] = useState<string | null>(null);
   const [tasksRefreshKey, setTasksRefreshKey] = useState(0);
   const historyLayersRef = useRef<string[]>([]);
   const skipNextPopRef = useRef(false);
   const mobileEditingRef = useRef(mobileEditing);
   const pendingNoteId = useRef<string | null>(null);
-  const templateMenuRef = useRef<HTMLDetailsElement>(null);
+  const templateMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const templateMenuRef = useRef<HTMLDivElement>(null);
+  const [isTemplateMenuOpen, setIsTemplateMenuOpen] = useState(false);
   const shareTargetHandledRef = useRef(false);
   const notes =
     notesState.area === activeArea ? notesState.notes : [];
@@ -92,6 +99,12 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   useEffect(() => {
     mobileEditingRef.current = mobileEditing;
   }, [mobileEditing]);
+
+  useEffect(() => {
+    setOfflineSyncScope(userEmail);
+    void syncPendingOfflineMutations();
+    return () => setOfflineSyncScope(null);
+  }, [userEmail]);
 
   useEffect(() => {
     let cancelled = false;
@@ -244,6 +257,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   const selectTab = useCallback(
     (tab: "notes" | "tasks" | "graph", preserveHistory = false) => {
+      setIsTemplateMenuOpen(false);
       if (tab === activeTab) return;
       if (tab === "notes") {
         if (!preserveHistory) closeHistoryLayer("tab");
@@ -264,6 +278,29 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     closeHistoryLayer("global-search");
     setGlobalSearchOpen(false);
   }, [closeHistoryLayer]);
+
+  useEffect(() => {
+    if (!isTemplateMenuOpen) return;
+
+    const closeOnOutsideInteraction = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (
+        templateMenuRef.current?.contains(target) ||
+        templateMenuButtonRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setIsTemplateMenuOpen(false);
+    };
+
+    document.addEventListener("mousedown", closeOnOutsideInteraction);
+    document.addEventListener("touchstart", closeOnOutsideInteraction);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideInteraction);
+      document.removeEventListener("touchstart", closeOnOutsideInteraction);
+    };
+  }, [isTemplateMenuOpen]);
 
   const openTemplateManager = useCallback(() => {
     if (!templateManagerOpen) pushHistoryLayer("template-manager");
@@ -368,64 +405,84 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   useEffect(() => {
     let cancelled = false;
+    const initialSyncStatus = window.setTimeout(() => {
+      setSyncStatus(
+        getPendingOfflineMutationCount() > 0 ? "pending" : "idle"
+      );
+    }, 0);
+    const handleSyncStatus = (event: Event) => {
+      const detail = (event as CustomEvent<{ status?: OfflineSyncStatus }>)
+        .detail;
+      if (
+        detail?.status === "idle" ||
+        detail?.status === "pending" ||
+        detail?.status === "syncing" ||
+        detail?.status === "error"
+      ) {
+        setSyncStatus(detail.status);
+      }
+    };
     const handleOffline = () => setIsOffline(true);
     const handleOnline = () => {
       setIsOffline(false);
-      clearOfflineCache();
-      clearServiceWorkerRuntimeCache();
-      setTasksRefreshKey((key) => key + 1);
+      void syncPendingOfflineMutations().then(() => {
+        if (cancelled) return;
+        setTasksRefreshKey((key) => key + 1);
 
-      getAllNotes()
-        .then((freshNotes) => {
-          if (cancelled) return;
-          const areaNotes = freshNotes.filter((note) => note.area === activeArea);
-          setNotesState({
-            area: activeArea,
-            notes: areaNotes,
-            loading: false,
-            error: null,
-          });
-          setSelectedNoteId((current) =>
-            areaNotes.some((note) => note.id === current)
-              ? current
-              : (areaNotes[0]?.id ?? null)
-          );
-        })
-        .catch((error: unknown) => {
-          if (cancelled) return;
-          setNotesState((current) =>
-            current.area === activeArea
-              ? {
-                  ...current,
-                  error:
-                    error instanceof Error
-                      ? error.message
-                      : "No se pudieron actualizar las notas.",
-                }
-              : current
-          );
-        });
-
-      getAreas()
-        .then((freshAreas) => {
-          if (cancelled) return;
-          setAreas(freshAreas);
-          setAreasError(null);
-          setActiveArea((current) =>
-            freshAreas.some((area) => area.slug === current)
-              ? current
-              : (freshAreas[0]?.slug ?? "")
-          );
-        })
-        .catch((error: unknown) => {
-          if (!cancelled) {
-            setAreasError(
-              error instanceof Error
-                ? error.message
-                : "No se pudieron actualizar las áreas."
+        getAllNotes()
+          .then((freshNotes) => {
+            if (cancelled) return;
+            const areaNotes = freshNotes.filter(
+              (note) => note.area === activeArea
             );
-          }
-        });
+            setNotesState({
+              area: activeArea,
+              notes: areaNotes,
+              loading: false,
+              error: null,
+            });
+            setSelectedNoteId((current) =>
+              areaNotes.some((note) => note.id === current)
+                ? current
+                : (areaNotes[0]?.id ?? null)
+            );
+          })
+          .catch((error: unknown) => {
+            if (cancelled) return;
+            setNotesState((current) =>
+              current.area === activeArea
+                ? {
+                    ...current,
+                    error:
+                      error instanceof Error
+                        ? error.message
+                        : "No se pudieron actualizar las notas.",
+                  }
+                : current
+            );
+          });
+
+        getAreas()
+          .then((freshAreas) => {
+            if (cancelled) return;
+            setAreas(freshAreas);
+            setAreasError(null);
+            setActiveArea((current) =>
+              freshAreas.some((area) => area.slug === current)
+                ? current
+                : (freshAreas[0]?.slug ?? "")
+            );
+          })
+          .catch((error: unknown) => {
+            if (!cancelled) {
+              setAreasError(
+                error instanceof Error
+                  ? error.message
+                  : "No se pudieron actualizar las áreas."
+              );
+            }
+          });
+      });
     };
     const handleCachedFallback = () => setIsOffline(true);
     const initialOfflineCheck = window.setTimeout(() => {
@@ -434,12 +491,15 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     window.addEventListener("offline", handleOffline);
     window.addEventListener("online", handleOnline);
     window.addEventListener("bnotes:offline-cache", handleCachedFallback);
+    window.addEventListener("bnotes:sync-status", handleSyncStatus);
     return () => {
       cancelled = true;
+      window.clearTimeout(initialSyncStatus);
       window.clearTimeout(initialOfflineCheck);
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("bnotes:offline-cache", handleCachedFallback);
+      window.removeEventListener("bnotes:sync-status", handleSyncStatus);
     };
   }, [activeArea]);
 
@@ -604,7 +664,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     updateNotes((prev) => [created, ...prev]);
     setSelectedNoteId(created.id);
     openMobileEditor();
-    if (template) templateMenuRef.current?.removeAttribute("open");
+    if (template) setIsTemplateMenuOpen(false);
   }
 
   async function handleSaveNote(
@@ -752,9 +812,19 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             <span className="hidden text-xs text-zinc-500 md:inline">
               {userEmail}
             </span>
-            {isOffline ? (
-              <span className="rounded-full border border-amber-800/70 bg-amber-950/40 px-2 py-1 text-[10px] font-medium text-amber-200">
-                Modo sin conexión
+            {isOffline || syncStatus !== "idle" ? (
+              <span
+                role="status"
+                aria-live="polite"
+                className="rounded-full border border-amber-800/70 bg-amber-950/40 px-2 py-1 text-[10px] font-medium text-amber-200"
+              >
+                {isOffline
+                  ? "Modo sin conexión"
+                  : syncStatus === "syncing"
+                    ? "Sincronizando"
+                    : syncStatus === "error"
+                      ? "Error de sincronización"
+                      : "Pendiente de sincronizar"}
               </span>
             ) : null}
           </div>
@@ -802,16 +872,30 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                     <Plus className="size-3.5" />
                     Nueva
                   </button>
-                  <details ref={templateMenuRef} className="relative">
-                    <summary
+                  <div className="relative">
+                    <button
+                      ref={templateMenuButtonRef}
+                      type="button"
+                      aria-haspopup="menu"
+                      aria-expanded={isTemplateMenuOpen}
+                      onClick={() =>
+                        setIsTemplateMenuOpen((isOpen) => !isOpen)
+                      }
                       title="Crear nota desde una plantilla"
                       aria-label="Crear nota desde una plantilla"
-                      className="flex cursor-pointer list-none items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+                      className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-600 hover:text-white"
                     >
                       <FilePlus2 className="size-3.5" />
                       <ChevronDown className="size-3" />
-                    </summary>
-                    <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-zinc-800 bg-zinc-950 p-1.5 shadow-xl">
+                    </button>
+                    {isTemplateMenuOpen ? (
+                    <div
+                      ref={templateMenuRef}
+                      role="menu"
+                      onMouseDown={(event) => event.stopPropagation()}
+                      onTouchStart={(event) => event.stopPropagation()}
+                      className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-zinc-800 bg-zinc-950 p-1.5 shadow-xl"
+                    >
                       {templatesError ? (
                         <p role="alert" className="px-3 py-2 text-[11px] text-red-300">
                           {templatesError}
@@ -826,7 +910,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                         <button
                           key={template.id}
                           type="button"
-                          onClick={() => handleCreateNote(template)}
+                          role="menuitem"
+                          onClick={() => {
+                            setIsTemplateMenuOpen(false);
+                            void handleCreateNote(template);
+                          }}
                           className="w-full rounded-lg px-3 py-2 text-left text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
                         >
                           {template.name}
@@ -837,14 +925,19 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                       <div className="my-1 border-t border-zinc-800" />
                       <button
                         type="button"
-                        onClick={openTemplateManager}
+                        role="menuitem"
+                        onClick={() => {
+                          setIsTemplateMenuOpen(false);
+                          openTemplateManager();
+                        }}
                         className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100"
                       >
                         <LayoutTemplate className="size-3.5" />
                         ⚙ Gestionar plantillas...
                       </button>
                     </div>
-                  </details>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 

@@ -5,8 +5,13 @@ import {
   isNetworkFailure,
   notifyOfflineCacheUsed,
   readOfflineCache,
+  upsertOfflineCacheItem,
   writeOfflineCache,
 } from "@/services/offlineCache";
+import {
+  enqueueOfflineMutation,
+  getPendingOfflineLocalIds,
+} from "@/services/offlineSync";
 
 const NOTES_CACHE_KEY = "bnotes_cache_notes";
 
@@ -49,8 +54,15 @@ export async function getNotesByArea(area: AreaId): Promise<Note[]> {
     const notes = await apiRequest<Note[]>(
       `/api/data/notes?area=${encodeURIComponent(area)}`
     );
-    cacheNotes(notes, area);
-    return notes;
+    const pendingIds = getPendingOfflineLocalIds(NOTES_CACHE_KEY);
+    const pendingLocalNotes = (readOfflineCache<Note>(NOTES_CACHE_KEY) ?? [])
+      .filter((note) => pendingIds.has(note.id) && note.area === area);
+    const mergedNotes = [
+      ...pendingLocalNotes,
+      ...notes.filter((note) => !pendingIds.has(note.id)),
+    ];
+    cacheNotes(mergedNotes, area);
+    return mergedNotes;
   } catch (error) {
     if (isNetworkFailure(error)) {
       const cached = getCachedNotes(area);
@@ -65,26 +77,82 @@ export async function createNote(
   title = "Sin título",
   content = ""
 ): Promise<Note> {
-  return apiRequest<Note>("/api/data/notes", {
-    method: "POST",
-    body: jsonBody({ area, title, content, links: [] }),
-  });
+  const normalizedTitle = title.trim() || "Sin título";
+  const body = jsonBody({ area, title: normalizedTitle, content, links: [] });
+  try {
+    const created = await apiRequest<Note>("/api/data/notes", {
+      method: "POST",
+      body,
+    });
+    upsertOfflineCacheItem(NOTES_CACHE_KEY, created);
+    return created;
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    const cached = readOfflineCache<Note>(NOTES_CACHE_KEY) ?? [];
+    const created: Note = {
+      id: `offline-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      user_id: cached[0]?.user_id ?? "offline",
+      area,
+      title: normalizedTitle,
+      content,
+      links: extractWikilinks(content),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    enqueueOfflineMutation({
+      path: "/api/data/notes",
+      method: "POST",
+      body,
+      cacheKey: NOTES_CACHE_KEY,
+      localId: created.id,
+    });
+    upsertOfflineCacheItem(NOTES_CACHE_KEY, created);
+    return created;
+  }
 }
 
 export async function updateNote(
   id: string,
   updates: { title?: string; content?: string }
 ): Promise<Note> {
-  return apiRequest<Note>("/api/data/notes", {
-    method: "PATCH",
-    body: jsonBody({
-      id,
+  const body = jsonBody({
+    id,
+    ...updates,
+    ...(typeof updates.content === "string"
+      ? { links: extractWikilinks(updates.content) }
+      : {}),
+  });
+  try {
+    const updated = await apiRequest<Note>("/api/data/notes", {
+      method: "PATCH",
+      body,
+    });
+    upsertOfflineCacheItem(NOTES_CACHE_KEY, updated);
+    return updated;
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    const cached = readOfflineCache<Note>(NOTES_CACHE_KEY) ?? [];
+    const current = cached.find((note) => note.id === id);
+    if (!current) throw error;
+
+    const updated: Note = {
+      ...current,
       ...updates,
       ...(typeof updates.content === "string"
         ? { links: extractWikilinks(updates.content) }
         : {}),
-    }),
-  });
+      updated_at: new Date().toISOString(),
+    };
+    enqueueOfflineMutation({
+      path: "/api/data/notes",
+      method: "PATCH",
+      body,
+      cacheKey: NOTES_CACHE_KEY,
+      localId: id,
+    });
+    upsertOfflineCacheItem(NOTES_CACHE_KEY, updated);
+    return updated;
+  }
 }
 
 export async function deleteNote(id: string): Promise<void> {

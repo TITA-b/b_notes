@@ -64,8 +64,25 @@ export function writeOfflineCache<T>(key: string, value: T[]): void {
   }
 }
 
+export function upsertOfflineCacheItem<T extends { id: string }>(
+  key: string,
+  item: T
+): void {
+  const cached = readOfflineCache<T>(key) ?? [];
+  writeOfflineCache(key, [item, ...cached.filter((entry) => entry.id !== item.id)]);
+}
+
 export function isNetworkFailure(error: unknown): boolean {
   if (typeof navigator !== "undefined" && !navigator.onLine) return true;
+  if (error instanceof TypeError) return true;
+  if (
+    error instanceof Error &&
+    "status" in error &&
+    typeof error.status === "number" &&
+    error.status >= 500
+  ) {
+    return true;
+  }
   const message = error instanceof Error ? error.message : String(error);
   return /failed to fetch|fetch failed|networkerror|network request failed/i.test(
     message
