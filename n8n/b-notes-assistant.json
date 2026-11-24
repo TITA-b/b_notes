@@ -1,0 +1,300 @@
+{
+  "name": "B_Notes Assistant (Groq Texto + Audio)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "b-notes-assistant",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "642f65b6-d012-4b1c-9914-911f9be39d8f",
+      "name": "Webhook B_Notes",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        16
+      ],
+      "webhookId": "ff948194-4e8e-4a45-aed3-902740284982"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "has-audio",
+              "leftValue": "={{ $json.body.audioBase64 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "602642e1-7d8a-4e11-a842-4ccbc9935d9e",
+      "name": "Tiene Audio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -432,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst buffer = Buffer.from(body.audioBase64, 'base64');\nreturn [{\n  json: body,\n  binary: {\n    file: {\n      data: buffer.toString('base64'),\n      mimeType: body.audioMimeType || 'audio/webm',\n      fileName: 'audio.webm'\n    }\n  }\n}];"
+      },
+      "id": "d3c439aa-fe9d-46eb-84aa-01c7a289b267",
+      "name": "Base64 a Binario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            },
+            {
+              "name": "model",
+              "value": "whisper-large-v3-turbo"
+            },
+            {
+              "name": "language",
+              "value": "es"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3396bbe8-71fa-4f81-9fce-acb5bbdd30bd",
+      "name": "Groq Whisper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        -112
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "wA3KMLXGIC6Gxbn5",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const webhookBody = $('Webhook B_Notes').first().json.body;\nconst transcribed = $input.first().json.text || '';\nreturn [{ json: { ...webhookBody, userMessage: transcribed } }];"
+      },
+      "id": "c90897b2-7bb6-4a10-8e69-15b9748ade39",
+      "name": "Unir Transcripcion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nreturn [{ json: { ...body, userMessage: body.message || '' } }];"
+      },
+      "id": "cebcc2a2-c9f3-4dd1-8340-0bddb751da07",
+      "name": "Preparar Texto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'openai/gpt-oss-20b', temperature: 0.3, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: 'Sos el asistente de B_Notes. Respondé SIEMPRE en JSON con el formato: {\"reply\": \"tu respuesta en markdown\", \"transcript\": \"opcional\", \"actions\": []}. Acciones válidas en actions: {\"type\": \"create_task\", \"title\": \"...\", \"dueDate\": \"ISO opcional\", \"area\": \"slug\"}, {\"type\": \"create_note\", \"title\": \"...\", \"content\": \"...\", \"area\": \"slug\"}, {\"type\": \"append_to_note\", \"noteId\": \"id\", \"content\": \"...\"}, {\"type\": \"create_gcal_event\", \"title\": \"...\", \"start\": \"ISO\"}. Contexto actual: ' + JSON.stringify($json.context) }, ...($json.history || []), { role: 'user', content: $json.userMessage }] }) }}",
+        "options": {}
+      },
+      "id": "67a34239-928f-43fe-a9b7-b1de072ad058",
+      "name": "Groq LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        16
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "wA3KMLXGIC6Gxbn5",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.choices?.[0]?.message?.content || '{}';\nlet parsed = {};\ntry { parsed = JSON.parse(raw); } catch { parsed = { reply: raw, actions: [] }; }\nconst transcript = $('Unir Transcripcion').isExecuted ? $('Unir Transcripcion').first().json.userMessage : undefined;\nreturn [{ json: { reply: parsed.reply || 'Listo.', transcript, actions: Array.isArray(parsed.actions) ? parsed.actions : [] } }];"
+      },
+      "id": "7742f4d4-984e-4db0-9f86-9ad732136514",
+      "name": "Formatear Respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "72f64ddd-fcb4-4311-9503-18177e12a780",
+      "name": "Responder a B_Notes",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        16
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook B_Notes": {
+      "main": [
+        [
+          {
+            "node": "Tiene Audio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tiene Audio?": {
+      "main": [
+        [
+          {
+            "node": "Base64 a Binario",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar Texto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Base64 a Binario": {
+      "main": [
+        [
+          {
+            "node": "Groq Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Whisper": {
+      "main": [
+        [
+          {
+            "node": "Unir Transcripcion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unir Transcripcion": {
+      "main": [
+        [
+          {
+            "node": "Groq LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Texto": {
+      "main": [
+        [
+          {
+            "node": "Groq LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq LLM": {
+      "main": [
+        [
+          {
+            "node": "Formatear Respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatear Respuesta": {
+      "main": [
+        [
+          {
+            "node": "Responder a B_Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "100f219f-969b-42b4-8c4a-39594168d89a",
+  "meta": {
+    "instanceId": "cd567c0f9b9e508795b007b5e852da9bc960e56a9afcfcbbf0da2bb6f448d410"
+  },
+  "nodeGroups": [],
+  "id": "6xVT6wrYqj0wPX7B",
+  "tags": []
+}
