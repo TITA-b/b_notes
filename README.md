@@ -77,6 +77,29 @@ GitHub Actions con `workflow_dispatch`.
 Si clonaste el repositorio y querés construir la imagen en ese equipo en lugar
 de descargarla de GHCR, ejecutá `docker compose up -d --build`.
 
+## Workflow de n8n y backups
+
+Para importar el asistente, abrí n8n, elegí **Workflows → Import from File** y
+seleccioná [`n8n/b-notes-assistant.json`](./n8n/b-notes-assistant.json).
+Configurá las credenciales necesarias y activá el workflow.
+
+Con el stack iniciado, ejecutá el backup manualmente desde PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\backup-bnotes.ps1
+```
+
+Los archivos PostgreSQL (`.sql.zip`) y n8n (`.tar.gz`) se guardan en
+`$env:BNOTES_BACKUP_DIR` si está configurada; si no, se usa una carpeta de
+Google Drive montada en `G:` o `.\backups`. Se eliminan backups de más de 14
+días. En Windows también queda programada la tarea
+`Backup_B_Notes_GoogleDrive` para ejecutarlo a diario a las 23:00.
+
+Para restaurar, extraé el `.sql.zip` y cargá el SQL con `psql` en una base
+PostgreSQL vacía; el `.tar.gz` contiene los datos del volumen de n8n. Detené
+los servicios correspondientes y guardá una copia del estado actual antes de
+reemplazar datos: la restauración puede sobrescribirlos.
+
 ## Producción
 
 Validá y compilá la aplicación con:
