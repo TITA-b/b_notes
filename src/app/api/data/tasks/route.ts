@@ -3,6 +3,17 @@ import type { Task } from "@/types/task";
 import { authenticateDataRequest, invalidRequest, notFound } from "@/app/api/data/_lib";
 import { query } from "@/lib/db";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeTask(task: Task): Task {
+  return {
+    ...task,
+    attachments: Array.isArray(task.attachments) ? task.attachments : [],
+  };
+}
+
 export async function GET(request: Request) {
   const auth = await authenticateDataRequest();
   if (auth.response) return auth.response;
@@ -20,28 +31,32 @@ export async function GET(request: Request) {
     values.push(eventId);
     filters.push(`gcal_event_id = $${values.length}`);
   }
-  const { rows } = await query<Task>(
-    `SELECT * FROM tasks WHERE ${filters.join(" AND ")} ORDER BY completed ASC, due_date ASC NULLS LAST, created_at DESC`,
-    values
-  );
-  return NextResponse.json(rows);
+  try {
+    const { rows } = await query<Task>(
+      `SELECT * FROM tasks WHERE ${filters.join(" AND ")} ORDER BY completed ASC, due_date ASC NULLS LAST, created_at DESC`,
+      values
+    );
+    return NextResponse.json(rows.map(normalizeTask));
+  } catch (error) {
+    console.error("Error listing tasks from PostgreSQL:", error);
+    return NextResponse.json(
+      { error: "No se pudieron cargar las tareas." },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(request: Request) {
   const auth = await authenticateDataRequest();
   if (auth.response) return auth.response;
 
-  let body: {
-    area?: unknown;
-    title?: unknown;
-    due_date?: unknown;
-    completed?: unknown;
-    sync_to_gcal?: unknown;
-    gcal_event_id?: unknown;
-    attachments?: unknown;
-  };
+  let body: Record<string, unknown>;
   try {
-    body = await request.json();
+    const parsed: unknown = await request.json();
+    if (!isRecord(parsed)) {
+      return invalidRequest("El cuerpo de la solicitud no es válido.");
+    }
+    body = parsed;
   } catch {
     return invalidRequest("El cuerpo de la solicitud no es válido.");
   }
@@ -55,41 +70,51 @@ export async function POST(request: Request) {
     return invalidRequest("Los adjuntos no son válidos.");
   }
 
-  const { rows } = await query<Task>(
-    `INSERT INTO tasks
-      (user_id, area, title, due_date, completed, sync_to_gcal, gcal_event_id, attachments)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING *`,
-    [
-      auth.user.id,
-      body.area,
-      body.title.trim(),
-      body.due_date ?? null,
-      body.completed === true,
-      body.sync_to_gcal === true,
-      typeof body.gcal_event_id === "string" ? body.gcal_event_id : null,
-      body.attachments ?? [],
-    ]
-  );
-  return NextResponse.json(rows[0], { status: 201 });
+  try {
+    const { rows } = await query<Task>(
+      `INSERT INTO tasks
+        (user_id, area, title, due_date, completed, sync_to_gcal, gcal_event_id, attachments)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [
+        auth.user.id,
+        body.area,
+        body.title.trim(),
+        body.due_date ?? null,
+        body.completed === true,
+        body.sync_to_gcal === true,
+        typeof body.gcal_event_id === "string" ? body.gcal_event_id : null,
+        JSON.stringify(body.attachments ?? []),
+      ]
+    );
+    if (!rows[0]) {
+      console.error("PostgreSQL returned no task after a successful insert.");
+      return NextResponse.json(
+        { error: "No se pudo crear la tarea." },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json(normalizeTask(rows[0]), { status: 201 });
+  } catch (error) {
+    console.error("Error creating task in PostgreSQL:", error);
+    return NextResponse.json(
+      { error: "No se pudo crear la tarea." },
+      { status: 500 }
+    );
+  }
 }
 
 export async function PATCH(request: Request) {
   const auth = await authenticateDataRequest();
   if (auth.response) return auth.response;
 
-  let body: {
-    id?: unknown;
-    title?: unknown;
-    area?: unknown;
-    due_date?: unknown;
-    completed?: unknown;
-    sync_to_gcal?: unknown;
-    gcal_event_id?: unknown;
-    attachments?: unknown;
-  };
+  let body: Record<string, unknown>;
   try {
-    body = await request.json();
+    const parsed: unknown = await request.json();
+    if (!isRecord(parsed)) {
+      return invalidRequest("El cuerpo de la solicitud no es válido.");
+    }
+    body = parsed;
   } catch {
     return invalidRequest("El cuerpo de la solicitud no es válido.");
   }
@@ -126,12 +151,20 @@ export async function PATCH(request: Request) {
     const placeholder = `$${values.length}`;
     return `${key} = ${key === "attachments" ? `${placeholder}::jsonb` : placeholder}`;
   });
-  const { rows } = await query<Task>(
-    `UPDATE tasks SET ${assignments.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
-    values
-  );
-  if (!rows[0]) return notFound("La tarea no existe.");
-  return NextResponse.json(rows[0]);
+  try {
+    const { rows } = await query<Task>(
+      `UPDATE tasks SET ${assignments.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
+      values
+    );
+    if (!rows[0]) return notFound("La tarea no existe.");
+    return NextResponse.json(normalizeTask(rows[0]));
+  } catch (error) {
+    console.error("Error updating task in PostgreSQL:", error);
+    return NextResponse.json(
+      { error: "No se pudo actualizar la tarea." },
+      { status: 500 }
+    );
+  }
 }
 
 export async function DELETE(request: Request) {
@@ -140,8 +173,16 @@ export async function DELETE(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return invalidRequest("Falta el identificador de la tarea.");
 
-  await query("DELETE FROM tasks WHERE user_id = $1 AND id = $2", [auth.user.id, id]);
-  return new NextResponse(null, { status: 204 });
+  try {
+    await query("DELETE FROM tasks WHERE user_id = $1 AND id = $2", [auth.user.id, id]);
+    return new NextResponse(null, { status: 204 });
+  } catch (error) {
+    console.error("Error deleting task from PostgreSQL:", error);
+    return NextResponse.json(
+      { error: "No se pudo eliminar la tarea." },
+      { status: 500 }
+    );
+  }
 }
 
 function isValidDate(value: unknown): boolean {

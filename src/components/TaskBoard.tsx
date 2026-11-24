@@ -55,6 +55,34 @@ interface GCalEvent {
   htmlLink: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isGCalEvent(value: unknown): value is GCalEvent {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.start === "string" &&
+    typeof value.htmlLink === "string"
+  );
+}
+
+function parseCalendarResponse(value: unknown): {
+  connected: boolean;
+  events: GCalEvent[];
+} {
+  if (!isRecord(value) || typeof value.connected !== "boolean") {
+    throw new Error("La respuesta de Google Calendar no tiene el formato esperado.");
+  }
+  const events = value.events;
+  if (!Array.isArray(events) || !events.every(isGCalEvent)) {
+    throw new Error("La lista de eventos de Google Calendar no tiene el formato esperado.");
+  }
+  return { connected: value.connected, events };
+}
+
 interface DriveApiResponse {
   error?: string;
   requiresReauth?: boolean;
@@ -97,7 +125,7 @@ function AttachmentChips({
   onPreview: (attachment: TaskAttachment) => void;
   disabled: boolean;
 }) {
-  if (attachments.length === 0) return null;
+  if (!Array.isArray(attachments) || attachments.length === 0) return null;
 
   return (
     <div className="flex flex-wrap gap-1.5">
@@ -272,16 +300,27 @@ export function TaskBoard({
   const [gcalConnected, setGcalConnected] = useState(false);
   const [gcalEvents, setGcalEvents] = useState<GCalEvent[]>([]);
   const [gcalLoading, setGcalLoading] = useState(true);
+  const [gcalError, setGcalError] = useState<string | null>(null);
   const [syncingTaskId, setSyncingTaskId] = useState<string | null>(null);
 
   const loading = loadedArea !== area;
-const loadCalendar = useCallback(async (withSpinner = true) => {
+  const loadCalendar = useCallback(async (withSpinner = true) => {
     if (withSpinner) setGcalLoading(true);
     try {
       const res = await fetch("/api/google/events");
-      const data = await res.json();
-      setGcalConnected(Boolean(data.connected));
-      setGcalEvents(data.events ?? []);
+      if (!res.ok) {
+        throw new Error("No se pudieron cargar los eventos de Google Calendar.");
+      }
+      const data: unknown = await res.json();
+      const calendar = parseCalendarResponse(data);
+      setGcalConnected(calendar.connected);
+      setGcalEvents(calendar.events);
+      setGcalError(null);
+    } catch (error: unknown) {
+      console.error("Could not load Google Calendar events.", error);
+      setGcalConnected(false);
+      setGcalEvents([]);
+      setGcalError("No se pudieron cargar los eventos de Google Calendar.");
     } finally {
       setGcalLoading(false);
     }
@@ -291,11 +330,24 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
     let cancelled = false;
 
     fetch("/api/google/events")
-      .then((res) => res.json())
-      .then((data) => {
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error("No se pudieron cargar los eventos de Google Calendar.");
+        }
+        return parseCalendarResponse(await res.json());
+      })
+      .then((calendar) => {
         if (cancelled) return;
-        setGcalConnected(Boolean(data.connected));
-        setGcalEvents(data.events ?? []);
+        setGcalConnected(calendar.connected);
+        setGcalEvents(calendar.events);
+        setGcalError(null);
+      })
+      .catch((error: unknown) => {
+        console.error("Could not load Google Calendar events.", error);
+        if (cancelled) return;
+        setGcalConnected(false);
+        setGcalEvents([]);
+        setGcalError("No se pudieron cargar los eventos de Google Calendar.");
       })
       .finally(() => {
         if (!cancelled) setGcalLoading(false);
@@ -310,7 +362,22 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
 
     getTasksByArea(area)
       .then((data) => {
-        if (!cancelled) setTasks(data);
+        if (!cancelled) {
+          if (!Array.isArray(data)) {
+            setTasks([]);
+            setTaskError("La respuesta de tareas no tiene el formato esperado.");
+            return;
+          }
+          setTasks(data);
+          setTaskError(null);
+        }
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setTasks([]);
+        setTaskError(
+          error instanceof Error ? error.message : "No se pudieron cargar las tareas."
+        );
       })
       .finally(() => {
         if (!cancelled) setLoadedArea(area);
@@ -326,6 +393,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
     if (!title.trim() || submitting || uploadingTarget === "draft") return;
 
     setSubmitting(true);
+    setTaskError(null);
     try {
       const created = await createTask(
         area,
@@ -333,10 +401,14 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
         dueDate || null,
         draftAttachments
       );
-      setTasks((prev) => [created, ...prev]);
+      setTasks((prev) => [created, ...(Array.isArray(prev) ? prev : [])]);
       setTitle("");
       setDueDate("");
       setDraftAttachments([]);
+    } catch (error: unknown) {
+      setTaskError(
+        error instanceof Error ? error.message : "No se pudo crear la tarea."
+      );
     } finally {
       setSubmitting(false);
     }
@@ -361,26 +433,41 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
         due_date: editDueDate || null,
       });
       setTasks((current) =>
-        current.map((item) => (item.id === task.id ? updatedTask : item))
+        Array.isArray(current)
+          ? current.map((item) => (item.id === task.id ? updatedTask : item))
+          : []
       );
       setEditingTaskId(null);
 
       if (task.sync_to_gcal && task.gcal_event_id) {
-        const response = await fetch("/api/google/events", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            eventId: task.gcal_event_id,
-            title: updatedTask.title,
-            dueDate: updatedTask.due_date,
-            area: updatedTask.area,
-          }),
-        });
-        const data = (await response.json()) as { error?: string };
-        if (!response.ok) {
-          throw new Error(data.error ?? "No se pudo actualizar Calendar.");
+        try {
+          const response = await fetch("/api/google/events", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              eventId: task.gcal_event_id,
+              title: updatedTask.title,
+              dueDate: updatedTask.due_date,
+              area: updatedTask.area,
+            }),
+          });
+          const data: unknown = await response.json();
+          if (!response.ok) {
+            const message =
+              isRecord(data) && typeof data.error === "string"
+                ? data.error
+                : "No se pudo actualizar Google Calendar.";
+            throw new Error(message);
+          }
+          await loadCalendar(false);
+        } catch (error: unknown) {
+          console.error("Task saved but Google Calendar sync failed.", error);
+          setTaskError(
+            error instanceof Error
+              ? `La tarea se guardó, pero no se pudo sincronizar con Google Calendar: ${error.message}`
+              : "La tarea se guardó, pero no se pudo sincronizar con Google Calendar."
+          );
         }
-        await loadCalendar(false);
       }
     } catch (error: unknown) {
       setTaskError(
@@ -406,9 +493,11 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
       });
       if (importedTask.area === area) {
         setTasks((current) =>
-          current.some((item) => item.id === importedTask.id)
-            ? current
-            : [importedTask, ...current]
+          Array.isArray(current)
+            ? current.some((item) => item.id === importedTask.id)
+              ? current
+              : [importedTask, ...current]
+            : [importedTask]
         );
       } else {
         setLinkedEventIds((current) => new Set(current).add(event.id));
@@ -499,9 +588,11 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
         }
         attachments = updatedAttachments;
         setTasks((current) =>
-          current.map((item) =>
-            item.id === task.id ? { ...item, attachments } : item
-          )
+          Array.isArray(current)
+            ? current.map((item) =>
+                item.id === task.id ? { ...item, attachments } : item
+              )
+            : []
         );
       }
     } catch (error: unknown) {
@@ -545,9 +636,11 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
       );
       await updateTaskAttachments(task.id, attachments);
       setTasks((current) =>
-        current.map((item) =>
-          item.id === task.id ? { ...item, attachments } : item
-        )
+        Array.isArray(current)
+          ? current.map((item) =>
+              item.id === task.id ? { ...item, attachments } : item
+            )
+          : []
       );
     } catch (error: unknown) {
       setDriveError(
@@ -561,7 +654,11 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
   async function handleToggle(task: Task) {
     const nextState = !task.completed;
     setTasks((prev) =>
-      prev.map((t) => (t.id === task.id ? { ...t, completed: nextState } : t))
+      Array.isArray(prev)
+        ? prev.map((t) =>
+            t.id === task.id ? { ...t, completed: nextState } : t
+          )
+        : []
     );
     await toggleTaskCompleted(task.id, nextState);
   }
@@ -595,7 +692,9 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
     }
 
     await deleteTask(task.id);
-    setTasks((prev) => prev.filter((item) => item.id !== task.id));
+    setTasks((prev) =>
+      Array.isArray(prev) ? prev.filter((item) => item.id !== task.id) : []
+    );
   }
 
   async function confirmTaskDelete() {
@@ -626,6 +725,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
   async function handleSyncToGCal(task: Task) {
     if (syncingTaskId) return;
     setSyncingTaskId(task.id);
+    setTaskError(null);
     try {
       const res = await fetch("/api/google/events", {
         method: "POST",
@@ -637,24 +737,43 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
           area: task.area,
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        setTasks((prev) =>
-          prev.map((t) =>
-            t.id === task.id
-              ? { ...t, sync_to_gcal: true, gcal_event_id: data.eventId }
-              : t
-          )
-        );
-        await loadCalendar();
+      const data: unknown = await res.json();
+      const eventId =
+        isRecord(data) && typeof data.eventId === "string"
+          ? data.eventId
+          : null;
+      if (!res.ok || eventId === null) {
+        const message =
+          isRecord(data) && typeof data.error === "string"
+            ? data.error
+            : "No se pudo sincronizar la tarea con Google Calendar.";
+        throw new Error(message);
       }
+      setTasks((prev) =>
+        Array.isArray(prev)
+          ? prev.map((t) =>
+              t.id === task.id
+                ? { ...t, sync_to_gcal: true, gcal_event_id: eventId }
+                : t
+            )
+          : []
+      );
+      await loadCalendar();
+    } catch (error: unknown) {
+      setTaskError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo sincronizar la tarea con Google Calendar."
+      );
     } finally {
       setSyncingTaskId(null);
     }
   }
 
-  const pendingTasks = tasks.filter((t) => !t.completed);
-  const completedTasks = tasks.filter((t) => t.completed);
+  const taskList = Array.isArray(tasks) ? tasks : [];
+  const calendarEvents = Array.isArray(gcalEvents) ? gcalEvents : [];
+  const pendingTasks = taskList.filter((t) => !t.completed);
+  const completedTasks = taskList.filter((t) => t.completed);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
@@ -766,7 +885,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
             <p className="py-10 text-center text-xs text-zinc-500">
               Cargando entregas…
             </p>
-          ) : tasks.length === 0 ? (
+          ) : taskList.length === 0 ? (
             <p className="rounded-xl border border-dashed border-zinc-800 py-12 text-center text-xs text-zinc-500">
               No tenés entregas ni tareas cargadas en{" "}
               <span className="text-zinc-300">{areaName}</span>.
@@ -931,7 +1050,9 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                       )}
                       <div className="mt-2 pl-7">
                         <AttachmentChips
-                          attachments={task.attachments ?? []}
+                          attachments={
+                            Array.isArray(task.attachments) ? task.attachments : []
+                          }
                           onRemove={(attachment) =>
                             void handleRemoveTaskAttachment(task, attachment)
                           }
@@ -980,7 +1101,9 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                         </div>
                         <div className="mt-2 pl-7">
                           <AttachmentChips
-                            attachments={task.attachments ?? []}
+                            attachments={
+                              Array.isArray(task.attachments) ? task.attachments : []
+                            }
                             onRemove={(attachment) =>
                               void handleRemoveTaskAttachment(task, attachment)
                             }
@@ -1043,13 +1166,20 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                 Conectar Google Calendar
               </a>
             </div>
-          ) : gcalEvents.length === 0 ? (
+          ) : gcalError ? (
+            <p
+              role="alert"
+              className="rounded-xl border border-red-900/70 bg-red-950/30 p-4 text-center text-xs text-red-200"
+            >
+              {gcalError}
+            </p>
+          ) : calendarEvents.length === 0 ? (
             <p className="rounded-xl border border-dashed border-zinc-800 py-8 text-center text-xs text-zinc-500">
               No tenés eventos próximos en tu calendario.
             </p>
           ) : (
             <ul className="space-y-2.5">
-              {gcalEvents.map((ev) => (
+              {calendarEvents.map((ev) => (
                 <li
                   key={ev.id}
                   className="rounded-xl border border-zinc-800/80 bg-zinc-950/80 p-3"
@@ -1072,7 +1202,7 @@ const loadCalendar = useCallback(async (withSpinner = true) => {
                   <p className="mt-1 text-[11px] text-zinc-500">
                     {formatDueDate(ev.start) ?? ev.start}
                   </p>
-                  {tasks.some((task) => task.gcal_event_id === ev.id) ||
+                  {taskList.some((task) => task.gcal_event_id === ev.id) ||
                   linkedEventIds.has(ev.id) ? (
                     <span className="mt-2 inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-400">
                       <Check className="size-3" />
