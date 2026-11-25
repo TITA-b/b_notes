@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "B_Notes — Segundo Cerebro",
+    name: "B_Notes",
     short_name: "B_Notes",
     description: "Sistema personal de notas, tareas, grafos y asistente IA",
     id: "/",
