@@ -808,17 +808,18 @@ export function TaskBoard({
   const completedTasks = taskList.filter((t) => t.completed);
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
-      {/* Columna izquierda: Entregas y tareas del área */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 md:px-8">
-        <div>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] overflow-hidden lg:grid-cols-[minmax(0,1fr)_24rem] lg:grid-rows-1">
+        {/* Columna izquierda: Entregas y tareas del área */}
+        <div className="flex min-h-0 flex-col overflow-hidden px-5 py-6 md:px-8">
+          <div className="shrink-0">
           <h2 className="text-xl font-semibold tracking-tight capitalize">
             Entregas y tareas — {areaName}
           </h2>
           <p className="mt-1 text-xs text-zinc-500">
             {pendingTasks.length} pendiente{pendingTasks.length === 1 ? "" : "s"}
           </p>
-        </div>
+          </div>
 
         {driveError ? (
           <div
@@ -930,7 +931,7 @@ export function TaskBoard({
           />
         </div>
 
-        <div className="mt-6 space-y-6">
+        <div className="mt-6 min-h-0 flex-1 space-y-6 overflow-y-auto">
           {loading ? (
             <p className="py-10 text-center text-xs text-zinc-500">
               Cargando entregas…
@@ -1222,7 +1223,7 @@ export function TaskBoard({
       </div>
 
       {/* Columna derecha: Agenda en vivo de Google Calendar */}
-      <aside className="w-full shrink-0 border-t border-zinc-800 bg-zinc-900/20 px-5 py-6 lg:w-96 lg:overflow-y-auto lg:border-t-0 lg:border-l">
+        <aside className="min-h-0 w-full overflow-y-auto border-t border-zinc-800 bg-zinc-900/20 px-5 py-6 lg:w-96 lg:border-t-0 lg:border-l">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-zinc-100">
@@ -1323,7 +1324,8 @@ export function TaskBoard({
             </ul>
           )}
         </div>
-      </aside>
+        </aside>
+      </div>
       <MediaLightboxModal
         media={activeMedia}
         onClose={closeLightbox}

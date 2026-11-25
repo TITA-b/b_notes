@@ -736,7 +736,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const selectedNote = notes.find((n) => n.id === selectedNoteId) ?? null;
 
   return (
-    <div className="min-h-dvh bg-zinc-950 text-zinc-100 md:pl-72">
+    <div className="h-screen overflow-hidden bg-zinc-950 text-zinc-100 md:pl-72">
       {areasError || shareCaptureError ? (
         <p role="alert" className="fixed top-16 right-4 z-[60] rounded-lg border border-red-900/70 bg-zinc-950 px-3 py-2 text-xs text-red-300">
           {areasError ?? shareCaptureError}
@@ -756,9 +756,9 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         onAreasChanged={handleAreasChanged}
       />
 
-      <div className="flex h-dvh flex-col pt-14 md:pt-0">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden pt-14 md:pt-0">
         {/* Barra superior de sub-módulos */}
-        <header className="flex items-center justify-between border-b border-zinc-800 bg-zinc-950 px-4 py-2.5 md:px-6">
+        <header className="flex shrink-0 items-center justify-between border-b border-zinc-800 bg-zinc-950 px-4 py-2.5 md:px-6">
           <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/60 p-1">
             <button
               type="button"
@@ -846,14 +846,14 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         </header>
 
         {activeTab === "graph" ? (
-          <div className="flex-1 overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden">
             <KnowledgeGraph
               activeArea={activeArea}
               onSelectNote={handleSelectNote}
             />
           </div>
         ) : activeTab === "tasks" ? (
-          <div className="flex-1 overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden">
             <TaskBoard
               key={`${activeArea}:${tasksRefreshKey}`}
               area={activeArea}
@@ -868,7 +868,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             />
           </div>
         ) : (
-          <div className="flex flex-1 overflow-hidden">
+          <div className="flex min-h-0 flex-1 overflow-hidden">
             {/* Lista de notas del área */}
             <section
               className={`w-full flex-col border-r border-zinc-800 bg-zinc-950 md:flex md:w-80 ${
