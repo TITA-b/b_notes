@@ -44,14 +44,25 @@ Las imágenes muestran B_Notes en tema oscuro y usan exclusivamente contenido si
 
 <table>
   <tr>
-    <td align="center"><strong>Editor de notas · Escritorio</strong><br><img src="docs/screenshots/notas-editor.png" alt="Editor de notas con formato y menú de plantillas" width="560"></td>
-    <td align="center"><strong>Tareas y Agenda · Escritorio</strong><br><img src="docs/screenshots/agenda-general.png" alt="Tareas en vista General junto al panel de Google Calendar" width="560"></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>Grafo de conocimiento · Escritorio</strong><br><img src="docs/screenshots/grafo.png" alt="Grafo de conocimiento con notas y conexiones" width="560"></td>
-    <td align="center"><strong>Captura rápida · PWA móvil</strong><br><img src="docs/screenshots/mobile-pwa.png" alt="Captura rápida de B_Notes en una vista móvil" width="280"></td>
+    <td align="center" width="33%">
+      <strong>Editor de notas · Escritorio</strong><br>
+      <img src="docs/screenshots/notas-editor.png" alt="Editor de notas con formato y menú de plantillas" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <strong>Tareas y Agenda · Escritorio</strong><br>
+      <img src="docs/screenshots/agenda-general.png" alt="Tareas en vista General junto al panel de Google Calendar" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <strong>Grafo de conocimiento · Escritorio</strong><br>
+      <img src="docs/screenshots/grafo.png" alt="Grafo de conocimiento con notas y conexiones" width="100%" />
+    </td>
   </tr>
 </table>
+
+<p align="center">
+  <strong>Captura rápida · PWA móvil</strong><br>
+  <img src="docs/screenshots/mobile-pwa.png" width="280" alt="Captura rápida · PWA móvil" />
+</p>
 
 ## Inicio rápido
 
