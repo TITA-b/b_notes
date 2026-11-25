@@ -161,3 +161,22 @@ Abrí la URL HTTPS en Chrome, iniciá sesión y elegí **Instalar aplicación** 
 Abrí la URL HTTPS en Safari, tocá **Compartir** y elegí **Agregar a pantalla de inicio**. Confirmá para instalar el acceso de B_Notes.
 
 El acceso al micrófono desde el navegador requiere un contexto seguro, normalmente HTTPS (o `localhost`). Una URL HTTP de la red local puede dejar sin habilitar el micrófono. Si no querés configurar HTTPS, como alternativa manual podés usar **Atajos** para dictar texto, copiarlo y abrir la URL de B_Notes para pegarlo; ese atajo no conecta directamente con el micrófono de la PWA.
+
+## Checklist de despliegue y primer backup
+
+- [ ] Cloná el repositorio en el servidor o Mini PC y confirmá que estén `docker-compose.yml`, `Dockerfile` y los scripts de backup.
+- [ ] Instalá Docker Engine/Desktop y Compose v2; comprobá que el servidor tenga espacio persistente y que los puertos requeridos estén disponibles.
+- [ ] Copiá `.env.example` a `.env`; definí `POSTGRES_PASSWORD` y `AUTH_SECRET` seguros. No agregues `.env` al repositorio.
+- [ ] Si vas a usar IA o Google, configurá `N8N_WEBHOOK_URL`, credenciales de Groq, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y la URI OAuth del dominio elegido.
+- [ ] Iniciá los servicios con `docker compose up -d` y revisá `docker compose ps`; PostgreSQL y B_Notes deben quedar saludables.
+- [ ] Abrí B_Notes en `http://localhost:3000`, creá la cuenta local y verificá la creación de una nota y una tarea.
+- [ ] Si necesitás acceso remoto, configurá Tailscale HTTPS, validá la URL desde otro dispositivo y registrá esa URL como callback OAuth si corresponde.
+- [ ] Probá el workflow de n8n y las integraciones opcionales de Calendar/Drive antes de depender de ellas.
+- [ ] Elegí un destino de backup protegido: Google Drive `Backups_B_Notes`, `BNOTES_BACKUP_DIR` o la carpeta local `backups/`.
+- [ ] Ejecutá manualmente el script del sistema operativo y confirmá que genere tanto el dump PostgreSQL como el archivo del volumen `n8n_data`:
+  - Windows: `.\backup-bnotes.ps1`
+  - macOS/Linux: `./backup-bnotes.sh`
+- [ ] Revisá que ambos archivos de la misma fecha existan, tengan tamaño mayor que cero y se puedan listar/descomprimir. Tratá los respaldos como datos privados.
+- [ ] Programá la ejecución diaria con Task Scheduler (Windows) o `crontab` (macOS/Linux), usando el mismo usuario que tiene acceso a Docker y al destino.
+- [ ] Ejecutá la tarea programada una vez y confirmá su resultado, fecha de los archivos y retención de respaldos antiguos.
+- [ ] Antes de migrar a otra Mini PC, seguí el procedimiento de [restauración y migración](BACKUPS.md#restaurar-o-migrar-a-otro-equipo) y probalo en un entorno separado.

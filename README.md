@@ -3,11 +3,13 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=next.js)](https://nextjs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker Compose](https://img.shields.io/badge/Docker-Compose%20v2-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![n8n](https://img.shields.io/badge/n8n-Automation-EA4B71?logo=n8n&logoColor=white)](https://n8n.io/)
+[![n8n AI](https://img.shields.io/badge/n8n-AI-EA4B71?logo=n8n&logoColor=white)](https://n8n.io/)
+[![Tailscale PWA](https://img.shields.io/badge/Tailscale-PWA-242424?logo=tailscale&logoColor=white)](https://tailscale.com/)
+[![Docker publish](https://github.com/TITA-b/b_notes/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/TITA-b/b_notes/actions/workflows/docker-publish.yml)
 
 **B_Notes** es un espacio personal *local-first* para notas, tareas y conocimiento, con asistente de IA, voz y sincronización opcional con Google Calendar y Drive. El acceso remoto puede mantenerse privado con Tailscale.
 
-## Arquitectura
+## Arquitectura del Sistema
 
 | Servicio | Función | Puerto |
 | --- | --- | --- |
@@ -17,16 +19,39 @@
 | `watchtower` | Actualiza la imagen de B_Notes desde GHCR | Interno |
 
 ```mermaid
-flowchart LR
-  PWA["PWA (Android / escritorio)"] -->|"API"| App["b-notes · Next.js 16 Standalone"]
-  App --> DB[("PostgreSQL 16")]
-  App -->|"Webhook"| N8N["n8n + Groq"]
-  PWA -->|"Suscripción Push"| PushAPI["/api/push/*"]
-  N8N -->|"POST + x-internal-secret"| PushAPI
+graph LR
+  Client["Cliente escritorio / PWA móvil"] --> Tailscale["Tailscale HTTPS · :3000"]
+  Tailscale --> App["Contenedor b-notes<br/>Next.js 16 Standalone"]
+  App --> PG[("PostgreSQL 16<br/>volumen postgres_data")]
+  App -->|"Webhook IA"| N8N["n8n<br/>Groq Whisper + Llama"]
+  App -->|"OAuth 2.0"| Google["Google Calendar + Drive"]
+  App --> PushAPI["API Push<br/>/api/push/*"]
+  Client -->|"Suscripción"| PushAPI
+  N8N -->|"Notificación programada<br/>x-internal-secret"| PushAPI
   PushAPI -->|"web-push · VAPID"| PushService["Servicio Push del navegador"]
-  PushService -->|"evento push"| SW["Service Worker · public/sw.js"]
-  SW -->|"clic en notificación"| PWA
+  PushService -->|"evento push"| SW["Service Worker<br/>public/sw.js"]
+  SW -->|"clic de notificación"| Client
+  Watchtower["Watchtower"] -->|"Actualiza imagen GHCR"| App
+  Scheduler["Task Scheduler / crontab"] --> Backup["backup-bnotes.ps1 / backup-bnotes.sh"]
+  PG --> Backup
+  N8NData[("volumen n8n_data")] --> Backup
+  Backup --> Drive[("Google Drive<br/>Backups_B_Notes")]
 ```
+
+## Capturas de Pantalla
+
+Las imágenes muestran B_Notes en tema oscuro y usan exclusivamente contenido sintético de demostración.
+
+<table>
+  <tr>
+    <td align="center"><strong>Editor de notas · Escritorio</strong><br><img src="docs/screenshots/notas-editor.png" alt="Editor de notas con formato y menú de plantillas" width="560"></td>
+    <td align="center"><strong>Tareas y Agenda · Escritorio</strong><br><img src="docs/screenshots/agenda-general.png" alt="Tareas en vista General junto al panel de Google Calendar" width="560"></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Grafo de conocimiento · Escritorio</strong><br><img src="docs/screenshots/grafo.png" alt="Grafo de conocimiento con notas y conexiones" width="560"></td>
+    <td align="center"><strong>Captura rápida · PWA móvil</strong><br><img src="docs/screenshots/mobile-pwa.png" alt="Captura rápida de B_Notes en una vista móvil" width="280"></td>
+  </tr>
+</table>
 
 ## Inicio rápido
 
