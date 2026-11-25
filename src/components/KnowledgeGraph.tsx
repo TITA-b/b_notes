@@ -14,7 +14,12 @@ import {
 } from "lucide-react";
 import { getAllNotes } from "@/services/notesService";
 import { getAreas } from "@/services/areasService";
-import type { Area, AreaId, Note } from "@/types/note";
+import {
+  GENERAL_AREA_ID,
+  type Area,
+  type AreaId,
+  type Note,
+} from "@/types/note";
 
 interface KnowledgeGraphProps {
   activeArea: AreaId;
@@ -155,7 +160,7 @@ export function KnowledgeGraph({
   }, []);
 
   const filteredNotes = useMemo(() => {
-    return scope === "all"
+    return scope === "all" || activeArea === GENERAL_AREA_ID
       ? allNotes
       : allNotes.filter((n) => n.area === activeArea);
   }, [allNotes, scope, activeArea]);
@@ -164,7 +169,10 @@ export function KnowledgeGraph({
     () => new Map(areas.map((area) => [area.slug, area])),
     [areas]
   );
-  const activeAreaName = areaBySlug.get(activeArea)?.name ?? activeArea;
+  const activeAreaName =
+    activeArea === GENERAL_AREA_ID
+      ? "General"
+      : areaBySlug.get(activeArea)?.name ?? activeArea;
 
   const { initialNodes, edges } = useMemo(() => {
     const byTitle = new Map<string, Note>();

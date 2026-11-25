@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   Activity,
   Download,
+  Globe2,
   LogOut,
   LayoutTemplate,
   Menu,
@@ -16,7 +17,7 @@ import { downloadAllNotesAsZip } from "@/lib/exportNotes";
 import { getAreaIcon } from "@/lib/areaIcons";
 import { clearOfflineCache, getAllNotes } from "@/services/notesService";
 import { AreaManagerModal } from "@/components/AreaManagerModal";
-import type { Area, AreaId } from "@/types/note";
+import { GENERAL_AREA_ID, type Area, type AreaId } from "@/types/note";
 
 interface SidebarProps {
   areas: Area[];
@@ -116,6 +117,21 @@ export function Sidebar({
       </div>
 
       <nav aria-label="Áreas" className="flex flex-1 flex-col gap-1 px-3">
+        <button
+          type="button"
+          onClick={() => {
+            onSelectArea(GENERAL_AREA_ID);
+            setOpen(false);
+          }}
+          className={`flex h-10 items-center gap-3 rounded-lg px-3 text-left text-sm transition ${
+            activeArea === GENERAL_AREA_ID
+              ? "bg-zinc-900 font-medium text-zinc-50"
+              : "text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-100"
+          }`}
+        >
+          <Globe2 className="size-4 text-zinc-300" />
+          General
+        </button>
         {areas.map((area) => {
           const Icon = getAreaIcon(area.icon);
           const isActive = activeArea === area.slug;

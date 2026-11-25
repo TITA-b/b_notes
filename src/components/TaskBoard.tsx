@@ -29,7 +29,7 @@ import {
   updateTaskAttachments,
   updateTask,
 } from "@/services/tasksService";
-import type { AreaId } from "@/types/note";
+import { GENERAL_AREA_ID, type Area, type AreaId } from "@/types/note";
 import type { Task, TaskAttachment } from "@/types/task";
 import {
   getDriveImagePreviewUrl,
@@ -44,6 +44,7 @@ import {
 interface TaskBoardProps {
   area: AreaId;
   areaName: string;
+  areas: Area[];
   closeLightboxSignal: number;
   onLightboxChange: (open: boolean) => void;
 }
@@ -238,16 +239,19 @@ function isOverdue(
 export function TaskBoard({
   area,
   areaName,
+  areas,
   closeLightboxSignal,
   onLightboxChange,
 }: TaskBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadedArea, setLoadedArea] = useState<AreaId | null>(null);
   const [title, setTitle] = useState("");
+  const [selectedTaskArea, setSelectedTaskArea] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [editArea, setEditArea] = useState("");
   const [editDueDate, setEditDueDate] = useState("");
   const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
   const [taskError, setTaskError] = useState<string | null>(null);
@@ -266,6 +270,13 @@ export function TaskBoard({
   const [activeMedia, setActiveMedia] = useState<LightboxMedia | null>(null);
   const previousCloseSignal = useRef(closeLightboxSignal);
   const [currentTime, setCurrentTime] = useState<number | null>(null);
+  const isGeneral = area === GENERAL_AREA_ID;
+  const taskAreaForNewTask = areas.some(
+    (candidate) => candidate.slug === selectedTaskArea
+  )
+    ? selectedTaskArea
+    : areas[0]?.slug ?? "";
+  const areaBySlug = new Map(areas.map((candidate) => [candidate.slug, candidate]));
 
   useEffect(() => {
     const updateCurrentTime = () => setCurrentTime(Date.now());
@@ -360,7 +371,16 @@ export function TaskBoard({
   useEffect(() => {
     let cancelled = false;
 
-    getTasksByArea(area)
+    async function loadTasks() {
+      if (area !== GENERAL_AREA_ID) return getTasksByArea(area);
+      const allTasks: Task[] = [];
+      for (const candidate of areas) {
+        allTasks.push(...(await getTasksByArea(candidate.slug)));
+      }
+      return allTasks;
+    }
+
+    loadTasks()
       .then((data) => {
         if (!cancelled) {
           if (!Array.isArray(data)) {
@@ -386,17 +406,24 @@ export function TaskBoard({
     return () => {
       cancelled = true;
     };
-  }, [area]);
+  }, [area, areas]);
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
-    if (!title.trim() || submitting || uploadingTarget === "draft") return;
+    if (
+      !title.trim() ||
+      submitting ||
+      uploadingTarget === "draft" ||
+      (isGeneral && !taskAreaForNewTask)
+    ) {
+      return;
+    }
 
     setSubmitting(true);
     setTaskError(null);
     try {
       const created = await createTask(
-        area,
+        isGeneral ? taskAreaForNewTask : area,
         title,
         dueDate || null,
         draftAttachments
@@ -418,6 +445,7 @@ export function TaskBoard({
     setTaskError(null);
     setEditingTaskId(task.id);
     setEditTitle(task.title);
+    setEditArea(task.area);
     setEditDueDate(toDateTimeLocal(task.due_date));
   }
 
@@ -431,6 +459,7 @@ export function TaskBoard({
       const updatedTask = await updateTask(task.id, {
         title: editTitle.trim(),
         due_date: editDueDate || null,
+        ...(isGeneral ? { area: editArea } : {}),
       });
       setTasks((current) =>
         Array.isArray(current)
@@ -486,12 +515,15 @@ export function TaskBoard({
     setImportingEventId(event.id);
     setTaskError(null);
     try {
-      const importedTask = await importCalendarEventAsTask(area, {
-        id: event.id,
-        summary: event.summary,
-        start: event.start,
-      });
-      if (importedTask.area === area) {
+      const importedTask = await importCalendarEventAsTask(
+        isGeneral ? taskAreaForNewTask : area,
+        {
+          id: event.id,
+          summary: event.summary,
+          start: event.start,
+        }
+      );
+      if (isGeneral || importedTask.area === area) {
         setTasks((current) =>
           Array.isArray(current)
             ? current.some((item) => item.id === importedTask.id)
@@ -818,6 +850,21 @@ export function TaskBoard({
           className="mt-5 flex flex-col gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3"
         >
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            {isGeneral ? (
+              <select
+                aria-label="Área de la nueva tarea"
+                value={taskAreaForNewTask}
+                onChange={(event) => setSelectedTaskArea(event.target.value)}
+                required
+                className="h-9 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 text-xs text-zinc-300 outline-none focus:border-zinc-600"
+              >
+                {areas.map((candidate) => (
+                  <option key={candidate.id} value={candidate.slug}>
+                    {candidate.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <input
               type="text"
               value={title}
@@ -857,7 +904,10 @@ export function TaskBoard({
               <button
                 type="submit"
                 disabled={
-                  !title.trim() || submitting || uploadingTarget === "draft"
+                  !title.trim() ||
+                  submitting ||
+                  uploadingTarget === "draft" ||
+                  (isGeneral && !taskAreaForNewTask)
                 }
                 className="flex h-9 items-center gap-1.5 rounded-lg bg-zinc-100 px-3.5 text-xs font-medium text-zinc-950 transition hover:bg-white disabled:opacity-50"
               >
@@ -900,11 +950,26 @@ export function TaskBoard({
                     currentTime
                   );
                   const formatted = formatDueDate(task.due_date);
+                  const taskArea = areaBySlug.get(task.area);
                   return (
                     <li
                       key={task.id}
-                      className="group rounded-xl border border-zinc-800/90 bg-zinc-900/40 px-4 py-3 transition hover:border-zinc-700"
+                      className="group rounded-xl border border-zinc-800/90 border-l-4 bg-zinc-900/40 px-4 py-3 transition hover:border-zinc-700"
+                      style={{
+                        borderColor: taskArea?.color,
+                        borderLeftColor: taskArea?.color,
+                      }}
                     >
+                      {isGeneral ? (
+                        <span className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-300">
+                          <span
+                            aria-hidden="true"
+                            className="size-1.5 rounded-full"
+                            style={{ backgroundColor: taskArea?.color }}
+                          />
+                          {taskArea?.name ?? task.area}
+                        </span>
+                      ) : null}
                       {editingTaskId === task.id ? (
                         <form
                           onSubmit={(event) =>
@@ -922,6 +987,21 @@ export function TaskBoard({
                             className="h-9 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
                           />
                           <div className="flex flex-wrap items-center gap-2">
+                            {isGeneral ? (
+                              <select
+                                aria-label="Área de la tarea"
+                                value={editArea}
+                                onChange={(event) => setEditArea(event.target.value)}
+                                required
+                                className="h-9 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 text-xs text-zinc-300 outline-none focus:border-zinc-600"
+                              >
+                                {areas.map((candidate) => (
+                                  <option key={candidate.id} value={candidate.slug}>
+                                    {candidate.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : null}
                             <input
                               type="datetime-local"
                               aria-label="Fecha y hora de la tarea"
@@ -1074,11 +1154,27 @@ export function TaskBoard({
                     Completadas ({completedTasks.length})
                   </p>
                   <ul className="space-y-1.5">
-                    {completedTasks.map((task) => (
+                    {completedTasks.map((task) => {
+                      const taskArea = areaBySlug.get(task.area);
+                      return (
                       <li
                         key={task.id}
-                        className="group rounded-lg px-3 py-2 text-zinc-500 hover:bg-zinc-900/30"
+                        className="group rounded-lg border border-zinc-800/90 border-l-4 px-3 py-2 text-zinc-500 hover:bg-zinc-900/30"
+                        style={{
+                          borderColor: taskArea?.color,
+                          borderLeftColor: taskArea?.color,
+                        }}
                       >
+                        {isGeneral ? (
+                          <span className="mb-1 inline-flex items-center gap-1.5 rounded-full bg-zinc-950/70 px-2 py-1 text-[10px] text-zinc-400">
+                            <span
+                              aria-hidden="true"
+                              className="size-1.5 rounded-full"
+                              style={{ backgroundColor: taskArea?.color }}
+                            />
+                            {taskArea?.name ?? task.area}
+                          </span>
+                        ) : null}
                         <div className="flex items-center justify-between gap-3">
                           <button
                             type="button"
@@ -1115,7 +1211,8 @@ export function TaskBoard({
                           />
                         </div>
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 </div>
               ) : null}

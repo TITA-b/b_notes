@@ -7,13 +7,54 @@ import { AREA_ICON_OPTIONS } from "@/lib/areaIcons";
 import type { Area } from "@/types/note";
 
 const AREA_COLORS = [
-  "#38bdf8",
-  "#a855f7",
+  "#ef4444",
+  "#f87171",
+  "#fca5a5",
+  "#fb923c",
+  "#fdba74",
+  "#fed7aa",
+  "#f59e0b",
+  "#fcd34d",
+  "#eab308",
+  "#fde047",
+  "#84cc16",
+  "#bef264",
+  "#d9f99d",
+  "#22c55e",
+  "#bbf7d0",
   "#34d399",
-  "#fbbf24",
-  "#f472b6",
-  "#fb7185",
+  "#10b981",
+  "#6ee7b7",
+  "#a7f3d0",
+  "#14b8a6",
+  "#5eead4",
+  "#99f6e4",
+  "#06b6d4",
+  "#67e8f9",
+  "#a5f3fc",
+  "#0ea5e9",
+  "#38bdf8",
+  "#bae6fd",
+  "#3b82f6",
   "#60a5fa",
+  "#bfdbfe",
+  "#6366f1",
+  "#818cf8",
+  "#c7d2fe",
+  "#8b5cf6",
+  "#a78bfa",
+  "#ddd6fe",
+  "#d946ef",
+  "#e879f9",
+  "#f5d0fe",
+  "#ec4899",
+  "#f9a8d4",
+  "#fbcfe8",
+  "#f43f5e",
+  "#fecdd3",
+  "#64748b",
+  "#94a3b8",
+  "#cbd5e1",
 ] as const;
 
 interface AreaManagerModalProps {
@@ -196,6 +237,30 @@ export function AreaManagerModal({
                     {color === option ? <Check className="size-4 text-zinc-950" /> : null}
                   </button>
                 ))}
+                <label
+                  title="Elegir un color personalizado"
+                  className={`relative flex size-8 cursor-pointer items-center justify-center overflow-hidden rounded-full border-2 ${
+                    AREA_COLORS.some((option) => option === color)
+                      ? "border-transparent"
+                      : "border-white"
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-0"
+                    style={{ backgroundColor: color }}
+                  />
+                  <input
+                    type="color"
+                    aria-label="Elegir color personalizado"
+                    value={color}
+                    onChange={(event) => setColor(event.target.value)}
+                    className="absolute inset-0 size-full cursor-pointer opacity-0"
+                  />
+                  {!AREA_COLORS.some((option) => option === color) ? (
+                    <Check className="relative size-4 text-zinc-950" />
+                  ) : null}
+                </label>
               </div>
             </fieldset>
 

@@ -40,7 +40,13 @@ import {
   syncPendingOfflineMutations,
   type OfflineSyncStatus,
 } from "@/services/offlineSync";
-import type { Area, AreaId, Note, NoteTemplate } from "@/types/note";
+import {
+  GENERAL_AREA_ID,
+  type Area,
+  type AreaId,
+  type Note,
+  type NoteTemplate,
+} from "@/types/note";
 
 interface WorkspaceShellProps {
   userEmail: string;
@@ -94,7 +100,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const notesError =
     notesState.area === activeArea ? notesState.error : null;
   const activeAreaInfo = areas.find((area) => area.slug === activeArea);
-  const activeAreaName = activeAreaInfo?.name ?? activeArea;
+  const activeAreaName =
+    activeArea === GENERAL_AREA_ID ? "General" : activeAreaInfo?.name ?? activeArea;
+  const noteCreationArea =
+    activeArea === GENERAL_AREA_ID ? areas[0]?.slug ?? "" : activeArea;
 
   useEffect(() => {
     mobileEditingRef.current = mobileEditing;
@@ -113,6 +122,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         if (cancelled) return;
         setAreas(loadedAreas);
         setActiveArea((current) =>
+          current === GENERAL_AREA_ID ||
           loadedAreas.some((area) => area.slug === current)
             ? current
             : (loadedAreas[0]?.slug ?? "")
@@ -432,9 +442,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         getAllNotes()
           .then((freshNotes) => {
             if (cancelled) return;
-            const areaNotes = freshNotes.filter(
-              (note) => note.area === activeArea
-            );
+            const areaNotes =
+              activeArea === GENERAL_AREA_ID
+                ? freshNotes
+                : freshNotes.filter((note) => note.area === activeArea);
             setNotesState({
               area: activeArea,
               notes: areaNotes,
@@ -468,6 +479,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             setAreas(freshAreas);
             setAreasError(null);
             setActiveArea((current) =>
+              current === GENERAL_AREA_ID ||
               freshAreas.some((area) => area.slug === current)
                 ? current
                 : (freshAreas[0]?.slug ?? "")
@@ -508,7 +520,9 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     const noteToOpen = pendingNoteId.current;
     pendingNoteId.current = null;
 
-    getNotesByArea(activeArea)
+    (activeArea === GENERAL_AREA_ID
+      ? getAllNotes()
+      : getNotesByArea(activeArea))
       .then((data) => {
         if (cancelled) return;
         setNotesState({
@@ -573,7 +587,8 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
     const selectedArea =
       nextActiveArea ??
-      (updatedAreas.some((area) => area.slug === activeArea)
+      (activeArea === GENERAL_AREA_ID ||
+      updatedAreas.some((area) => area.slug === activeArea)
         ? activeArea
         : updatedAreas[0]?.slug);
 
@@ -603,7 +618,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   const handleSelectNote = useCallback((note: Note) => {
     selectTab("notes", true);
-    if (note.area !== activeArea) {
+    if (activeArea !== GENERAL_AREA_ID && note.area !== activeArea) {
       pendingNoteId.current = note.id;
       setActiveArea(note.area);
       return;
@@ -641,7 +656,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
       .filter((value): value is string => Boolean(value))
       .join("\n\n");
 
-    createNote(activeArea, title, content)
+    createNote(noteCreationArea, title, content)
       .then((created) => {
         handleSelectNote(created);
         window.history.replaceState({}, "", "/");
@@ -653,11 +668,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             : "No se pudo guardar la captura compartida."
         );
       });
-  }, [activeArea, areas.length, handleSelectNote]);
+  }, [activeArea, areas.length, handleSelectNote, noteCreationArea]);
 
   async function handleCreateNote(template?: NoteTemplate) {
     const created = await createNote(
-      activeArea,
+      noteCreationArea,
       template?.default_title,
       template?.content
     );
@@ -708,7 +723,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   }
 
   async function handleOpenWikilink(linkTitle: string) {
-    const target = await findOrCreateNoteByTitle(linkTitle, activeArea);
+    const target = await findOrCreateNoteByTitle(linkTitle, noteCreationArea);
     handleSelectNote(target);
   }
 
@@ -843,6 +858,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
               key={`${activeArea}:${tasksRefreshKey}`}
               area={activeArea}
               areaName={activeAreaName}
+              areas={areas}
               closeLightboxSignal={closeLightboxSignal}
               onLightboxChange={(open) => {
                 if (open && !lightboxOpen) pushHistoryLayer("lightbox");
@@ -948,7 +964,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                     type="text"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Buscar en esta área…"
+                    placeholder={
+                      activeArea === GENERAL_AREA_ID
+                        ? "Buscar en todas las áreas…"
+                        : "Buscar en esta área…"
+                    }
                     className="h-8 w-full rounded-lg border border-zinc-800 bg-zinc-900 pr-3 pl-8 text-xs text-zinc-200 placeholder-zinc-500 outline-none focus:border-zinc-600"
                   />
                 </div>
@@ -992,6 +1012,21 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                             <span className="truncate text-sm font-medium">
                               {item.title || "Sin título"}
                             </span>
+                            {activeArea === GENERAL_AREA_ID ? (
+                              <span className="mt-1 inline-flex max-w-full items-center gap-1.5 truncate text-[10px] text-zinc-500">
+                                <span
+                                  aria-hidden="true"
+                                  className="size-1.5 shrink-0 rounded-full"
+                                  style={{
+                                    backgroundColor:
+                                      areas.find((area) => area.slug === item.area)
+                                        ?.color ?? "#71717a",
+                                  }}
+                                />
+                                {areas.find((area) => area.slug === item.area)?.name ??
+                                  item.area}
+                              </span>
+                            ) : null}
                             <span className="mt-0.5 truncate text-xs text-zinc-500">
                               {item.content
                                 ? item.content
@@ -1057,15 +1092,16 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           closeHistoryLayer("ai");
           setAiOpen(false);
         }}
-        activeArea={activeArea}
+        activeArea={noteCreationArea}
         activeAreaName={activeAreaName}
         activeNoteId={selectedNoteId}
         activeNoteTitle={selectedNote?.title}
         onActionsExecuted={({ createdNotes, createdTasks, updatedNote }) => {
           if (createdNotes.length > 0) {
-            const notesInArea = createdNotes.filter(
-              (n) => n.area === activeArea
-            );
+            const notesInArea =
+              activeArea === GENERAL_AREA_ID
+                ? createdNotes
+                : createdNotes.filter((n) => n.area === activeArea);
             if (notesInArea.length > 0) {
               updateNotes((prev) => [...notesInArea, ...prev]);
               setSelectedNoteId(notesInArea[0].id);

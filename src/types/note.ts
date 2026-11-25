@@ -1,5 +1,7 @@
 export type AreaId = string;
 
+export const GENERAL_AREA_ID = "__general__";
+
 export interface Area {
   id: string;
   user_id: string;
