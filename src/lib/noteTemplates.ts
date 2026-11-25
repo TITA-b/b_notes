@@ -32,6 +32,26 @@ export const NOTE_TEMPLATES: NoteTemplate[] = [
     position: 2,
     is_default: true,
   },
+  {
+    id: "periodic-daily",
+    name: "Nota diaria",
+    area_slug: null,
+    default_title: "Nota de hoy",
+    content:
+      "## Agenda de hoy\n\n{{agenda}}\n\n## Tareas pendientes / para hoy\n\n{{tareas}}\n\n## Bitácora / Notas rápidas del día\n\n{{bitacora}}",
+    position: 3,
+    is_default: true,
+  },
+  {
+    id: "periodic-weekly",
+    name: "Planificación semanal",
+    area_slug: null,
+    default_title: "Hoja semanal",
+    content:
+      "## Foco de la semana\n\n{{foco}}\n\n## Agenda y plan diario\n\n{{agenda_semanal}}\n\n## Pendientes generales\n\n{{tareas}}\n\n## Notas fijas\n\n{{notas_fijas}}\n\n## Archivo de completados\n\n{{archivo}}",
+    position: 4,
+    is_default: true,
+  },
 ];
 
 export function getNoteTemplatesForArea(

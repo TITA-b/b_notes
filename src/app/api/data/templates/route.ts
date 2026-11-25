@@ -30,15 +30,15 @@ export async function GET() {
         await client.query("UPDATE users SET templates_seeded = true WHERE id = $1", [
           auth.user.id,
         ]);
-        const { rows: seeded } = await client.query<NoteTemplate>(
-          `SELECT id, name, area_slug, default_title, content, position, is_default
-           FROM note_templates WHERE user_id = $1 ORDER BY position ASC`,
-          [auth.user.id]
-        );
-        return seeded;
       }
     }
-    return rows;
+    await insertMissingPeriodicTemplates(client, auth.user.id);
+    const { rows: currentTemplates } = await client.query<NoteTemplate>(
+      `SELECT id, name, area_slug, default_title, content, position, is_default
+       FROM note_templates WHERE user_id = $1 ORDER BY position ASC`,
+      [auth.user.id]
+    );
+    return currentTemplates;
   });
   return NextResponse.json(templates);
 }
@@ -177,6 +177,35 @@ async function insertDefaultTemplates(
       `INSERT INTO note_templates
         (id, user_id, name, area_slug, default_title, content, position, is_default)
        VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+       ON CONFLICT (user_id, id) DO NOTHING`,
+      [
+        template.id,
+        userId,
+        template.name,
+        template.area_slug,
+        template.default_title,
+        template.content,
+        template.position,
+      ]
+    );
+  }
+}
+
+async function insertMissingPeriodicTemplates(
+  client: PoolClient,
+  userId: string
+): Promise<void> {
+  for (const template of NOTE_TEMPLATES.filter((item) =>
+    ["periodic-daily", "periodic-weekly"].includes(item.id)
+  )) {
+    await client.query(
+      `INSERT INTO note_templates
+        (id, user_id, name, area_slug, default_title, content, position, is_default)
+       SELECT $1, $2, $3, $4, $5, $6, $7, true
+       WHERE NOT EXISTS (
+         SELECT 1 FROM note_templates
+         WHERE user_id = $2 AND lower(btrim(name)) = lower($3)
+       )
        ON CONFLICT (user_id, id) DO NOTHING`,
       [
         template.id,

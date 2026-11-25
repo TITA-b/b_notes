@@ -370,7 +370,7 @@ export function Sidebar({
               onOpenDailyNote();
               setOpen(false);
             }}
-            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2 text-left text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50"
+            className="flex h-8 w-full items-center gap-2.5 rounded-md border border-zinc-800 px-2 py-1.5 text-left text-xs font-medium text-zinc-300 transition hover:bg-zinc-800/80 hover:text-zinc-50"
           >
             <CalendarDays className="size-4 text-sky-400" />
             Nota de hoy
@@ -381,7 +381,7 @@ export function Sidebar({
               onOpenWeeklyNote();
               setOpen(false);
             }}
-            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2 text-left text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50"
+            className="flex h-8 w-full items-center gap-2.5 rounded-md border border-zinc-800 px-2 py-1.5 text-left text-xs font-medium text-zinc-300 transition hover:bg-zinc-800/80 hover:text-zinc-50"
           >
             <CalendarRange className="size-4 text-violet-400" />
             Hoja semanal

@@ -1,6 +1,8 @@
 import { createNote, getAllNotes, updateNote } from "@/services/notesService";
 import { getTasksByArea } from "@/services/tasksService";
-import type { Area, AreaId, Note } from "@/types/note";
+import { getTemplates } from "@/services/templatesService";
+import { NOTE_TEMPLATES } from "@/lib/noteTemplates";
+import type { Area, AreaId, Note, NoteTemplate } from "@/types/note";
 import type { Task } from "@/types/task";
 
 export type PeriodicNoteKind = "daily" | "weekly";
@@ -24,8 +26,6 @@ interface PeriodicSnapshot {
   tasks: Task[];
   taskNotice: string | null;
 }
-
-type ContentMode = "html" | "markdown";
 
 interface HeadingRange {
   title: string;
@@ -156,7 +156,7 @@ function eventDateKey(event: CalendarEvent): string | null {
   return Number.isNaN(date.getTime()) ? null : localDateKey(date);
 }
 
-function eventLabel(event: CalendarEvent): string {
+function eventMarkdown(event: CalendarEvent): string {
   const isAllDay = /^\d{4}-\d{2}-\d{2}$/.test(event.start);
   const time = isAllDay
     ? "Todo el día"
@@ -164,7 +164,7 @@ function eventLabel(event: CalendarEvent): string {
         hour: "2-digit",
         minute: "2-digit",
       });
-  return `${isAllDay ? "📅" : "🕒"} ${time} · ${event.summary}`;
+  return `- ${isAllDay ? "📅" : "🕒"} **${time}** · ${escapeMarkdown(event.summary)}`;
 }
 
 function taskDateKey(task: Task): string | null {
@@ -174,56 +174,70 @@ function taskDateKey(task: Task): string | null {
   return Number.isNaN(date.getTime()) ? null : localDateKey(date);
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 function escapeMarkdown(value: string): string {
   return value.replace(/([\\`*_{}[\]()#+.!|>-])/g, "\\$1");
 }
 
-function makeHeading(level: number, title: string, mode: ContentMode): string {
-  if (mode === "html") return `<h${level}>${escapeHtml(title)}</h${level}>`;
+function makeHeading(level: number, title: string): string {
   return `${"#".repeat(level)} ${title}`;
 }
 
-function makeNotice(text: string, mode: ContentMode): string {
-  if (mode === "html") return `<p><em>${escapeHtml(text)}</em></p>`;
+function makeNotice(text: string): string {
   return `_${escapeMarkdown(text)}_`;
 }
 
-function makeList(items: string[], mode: ContentMode): string {
-  if (mode === "html") {
-    if (items.length === 0) return "";
-    return `<ul>${items
-      .map((item) => `<li><p>${escapeHtml(item)}</p></li>`)
-      .join("")}</ul>`;
-  }
+function makeList(items: string[]): string {
   return items.map((item) => `- ${escapeMarkdown(item)}`).join("\n");
 }
 
-function makeTaskList(tasks: Task[], mode: ContentMode): string {
-  if (tasks.length === 0) return "";
-  if (mode === "html") {
-    return `<ul data-type="taskList">${tasks
-      .map(
-        (task) =>
-          `<li data-type="taskItem" data-checked="false"><label><input type="checkbox" /><span></span></label><div><p>${escapeHtml(task.title)}</p></div></li>`
-      )
-      .join("")}</ul>`;
-  }
+function makeTaskList(tasks: Task[]): string {
   return tasks.map((task) => `- [ ] ${escapeMarkdown(task.title)}`).join("\n");
+}
+
+interface TemplateSection {
+  title: string;
+  placeholder: string;
+  body: string | undefined;
+  required?: boolean;
+}
+
+function replaceSectionBody(
+  content: string,
+  title: string,
+  body: string
+): string {
+  const section = findSection(content, title);
+  if (!section) {
+    return `${content.trim()}\n\n${makeHeading(2, title)}\n\n${body}`.trim();
+  }
+  return `${content.slice(0, section.bodyStart)}\n\n${body}\n\n${content.slice(
+    section.end
+  )}`
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function renderTemplate(
+  templateContent: string,
+  date: string,
+  sections: TemplateSection[]
+): string {
+  let content = normalizeMarkdown(templateContent).replace(/\{\{fecha\}\}/gi, date);
+  for (const section of sections) {
+    const placeholder = `{{${section.placeholder}}}`;
+    if (content.includes(placeholder)) {
+      content = content.replaceAll(placeholder, section.body ?? "");
+    } else if (section.body !== undefined || section.required) {
+      content = replaceSectionBody(content, section.title, section.body ?? "");
+    }
+  }
+  return normalizeMarkdown(content);
 }
 
 function dailyContent(
   snapshot: PeriodicSnapshot,
-  mode: ContentMode,
-  journal = ""
+  templateContent: string,
+  journal?: string
 ): string {
   const todayKey = localDateKey(snapshot.days[0]);
   const events = snapshot.events
@@ -237,30 +251,39 @@ function dailyContent(
     .sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""));
 
   const agendaBody = snapshot.calendarNotice
-    ? makeNotice(snapshot.calendarNotice, mode)
+    ? makeNotice(snapshot.calendarNotice)
     : events.length
-      ? makeList(events.map(eventLabel), mode)
-      : makeNotice("No hay eventos programados para hoy.", mode);
+      ? events.map(eventMarkdown).join("\n")
+      : makeNotice("No hay eventos programados para hoy.");
   const taskBody = snapshot.taskNotice
-    ? makeNotice(snapshot.taskNotice, mode)
+    ? makeNotice(snapshot.taskNotice)
     : tasks.length
-      ? makeTaskList(tasks, mode)
-      : makeNotice("No hay tareas atrasadas ni con vencimiento hoy.", mode);
-  return [
-    makeHeading(2, "Agenda de hoy", mode),
-    agendaBody,
-    makeHeading(2, "Tareas pendientes / para hoy", mode),
-    taskBody,
-    makeHeading(2, "Bitácora / Notas rápidas del día", mode),
-    journal || (mode === "html" ? "<p></p>" : ""),
-  ]
-    .filter(Boolean)
-    .join("\n");
+      ? makeTaskList(tasks)
+      : makeNotice("No hay tareas atrasadas ni con vencimiento hoy.");
+  return renderTemplate(templateContent, todayKey, [
+    {
+      title: "Agenda de hoy",
+      placeholder: "agenda",
+      body: agendaBody,
+      required: true,
+    },
+    {
+      title: "Tareas pendientes / para hoy",
+      placeholder: "tareas",
+      body: taskBody,
+      required: true,
+    },
+    {
+      title: "Bitácora / Notas rápidas del día",
+      placeholder: "bitacora",
+      body: journal,
+    },
+  ]);
 }
 
 function weeklyContent(
   snapshot: PeriodicSnapshot,
-  mode: ContentMode,
+  templateContent: string,
   preserved: {
     focus?: string;
     fixedNotes?: string;
@@ -286,54 +309,57 @@ function weeklyContent(
       day.toLocaleDateString("es", { weekday: "long", day: "2-digit", month: "2-digit" })
     );
     agendaParts.push(
-      makeHeading(3, dayLabel, mode),
-      makeHeading(4, "Agenda", mode),
+      makeHeading(3, dayLabel),
+      makeHeading(4, "Agenda"),
       snapshot.calendarNotice
-        ? makeNotice(snapshot.calendarNotice, mode)
+        ? makeNotice(snapshot.calendarNotice)
         : events.length
-          ? makeList(events.map(eventLabel), mode)
-          : makeNotice("Sin eventos programados.", mode),
-      makeHeading(4, `Notas del día: ${key}`, mode),
-      preserved.dayNotes?.get(key) ?? (mode === "html" ? "<p></p>" : "")
+          ? events.map(eventMarkdown).join("\n")
+          : makeNotice("Sin eventos programados."),
+      makeHeading(4, `Notas del día: ${key}`),
+      preserved.dayNotes?.get(key) ?? ""
     );
   }
 
   const taskBody = snapshot.taskNotice
-    ? makeNotice(snapshot.taskNotice, mode)
+    ? makeNotice(snapshot.taskNotice)
     : weeklyTasks.length
-      ? makeTaskList(weeklyTasks, mode)
-      : makeNotice("No hay tareas abiertas para esta semana.", mode);
+      ? makeTaskList(weeklyTasks)
+      : makeNotice("No hay tareas abiertas para esta semana.");
 
-  return [
-    makeHeading(2, "Foco de la semana", mode),
-    preserved.focus ?? (mode === "html" ? "<p></p>" : ""),
-    makeHeading(2, "Agenda y plan diario", mode),
-    agendaParts.join("\n"),
-    makeHeading(2, "Pendientes generales", mode),
-    taskBody,
-    makeHeading(2, "Notas fijas", mode),
-    preserved.fixedNotes ?? (mode === "html" ? "<p></p>" : ""),
-    ...(preserved.archive
-      ? [makeHeading(2, "Archivo de completados", mode), preserved.archive]
-      : []),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return renderTemplate(templateContent, localDateKey(snapshot.days[0]), [
+    {
+      title: "Foco de la semana",
+      placeholder: "foco",
+      body: preserved.focus,
+    },
+    {
+      title: "Agenda y plan diario",
+      placeholder: "agenda_semanal",
+      body: agendaParts.join("\n\n"),
+      required: true,
+    },
+    {
+      title: "Pendientes generales",
+      placeholder: "tareas",
+      body: taskBody,
+      required: true,
+    },
+    {
+      title: "Notas fijas",
+      placeholder: "notas_fijas",
+      body: preserved.fixedNotes,
+    },
+    {
+      title: "Archivo de completados",
+      placeholder: "archivo",
+      body: preserved.archive,
+    },
+  ]);
 }
 
 function readHeadings(content: string): HeadingRange[] {
-  const htmlHeadings = Array.from(
-    content.matchAll(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi)
-  );
-  if (htmlHeadings.length) {
-    return htmlHeadings.map((match) => ({
-      title: (match[2] ?? "").replace(/<[^>]*>/g, "").trim(),
-      level: Number(match[1]),
-      start: match.index ?? 0,
-      end: (match.index ?? 0) + match[0].length,
-    }));
-  }
-  return Array.from(content.matchAll(/^(#{1,6})\s+(.+?)\s*$/gm)).map(
+  return Array.from(content.matchAll(/^[ \t]*(#{1,6})\s+(.+?)\s*$/gm)).map(
     (match) => ({
       title: match[2].trim(),
       level: match[1].length,
@@ -368,35 +394,90 @@ function extractSection(content: string, title: string): string | undefined {
   return content.slice(section.bodyStart, section.end).trim();
 }
 
-function contentMode(content: string): ContentMode {
-  return /<h[1-6]\b/i.test(content) ? "html" : "markdown";
-}
-
-function decodeHtml(value: string): string {
+function decodeHtmlEntities(value: string): string {
   return value
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&#39;|&#x27;/gi, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#(x[0-9a-f]+|\d+);/gi, (entity, code: string) => {
+      const codePoint = code[0].toLowerCase() === "x"
+        ? Number.parseInt(code.slice(1), 16)
+        : Number.parseInt(code, 10);
+      return codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : entity;
+    })
+    .replace(/&amp;/g, "&");
+}
+
+function htmlInlineToMarkdown(value: string): string {
+  return decodeHtmlEntities(
+    value
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, "**$2**")
+      .replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, "_$2_")
+      .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, "`$1`")
+      .replace(
+        /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+        "[$2]($1)"
+      )
+      .replace(/<[^>]*>/g, "")
+  );
+}
+
+function normalizeMarkdown(content: string): string {
+  return content
+    .replace(
+      /<ul\b([^>]*)>([\s\S]*?)<\/ul>/gi,
+      (_list: string, attributes: string, body: string) => {
+        const isTaskList = /data-type=["']taskList["']/i.test(attributes);
+        const items = Array.from(
+          body.matchAll(/<li\b([^>]*)>([\s\S]*?)<\/li>/gi)
+        );
+        return items
+          .map((item) => {
+            const itemAttributes = item[1] ?? "";
+            const rawItemBody = item[2] ?? "";
+            const itemBody = rawItemBody.replace(
+              /<label\b[^>]*>[\s\S]*?<\/label>/gi,
+              ""
+            );
+            const isTask =
+              isTaskList || /data-type=["']taskItem["']/i.test(itemAttributes);
+            const checked =
+              /data-checked=["']true["']/i.test(itemAttributes) ||
+              /<input\b[^>]*\bchecked\b/i.test(rawItemBody);
+            const title = htmlInlineToMarkdown(itemBody).trim();
+            return `- ${isTask ? `[${checked ? "x" : " "}] ` : ""}${title}`;
+          })
+          .join("\n");
+      }
+    )
+    .replace(
+      /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi,
+      (_heading, level: string, text: string) =>
+        `${"#".repeat(Number(level))} ${htmlInlineToMarkdown(text).trim()}`
+    )
+    .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/gi, (_paragraph, text: string) =>
+      htmlInlineToMarkdown(text).trim()
+    )
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/?(?:div|section|article)\b[^>]*>/gi, "")
+    .replace(/<[^>]*>/g, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function completedTaskTitles(content: string): string[] {
   const completed = new Set<string>();
-  const markdownTasks = content.matchAll(/^\s*[-*+]\s+\[x\]\s+(.+)$/gim);
+  const markdownTasks = normalizeMarkdown(content).matchAll(
+    /^\s*[-*+]\s+\[x\]\s+(.+)$/gim
+  );
   for (const match of markdownTasks) {
     const title = match[1].trim();
-    if (title) completed.add(title);
-  }
-  const htmlItems = content.matchAll(/<li\b([^>]*)>([\s\S]*?)<\/li>/gi);
-  for (const match of htmlItems) {
-    if (
-      !/data-checked=["']true["']/i.test(match[1]) &&
-      !/<input\b[^>]*\bchecked\b/i.test(match[2])
-    ) {
-      continue;
-    }
-    const title = decodeHtml(match[2].replace(/<[^>]*>/g, "")).trim();
     if (title) completed.add(title);
   }
   return Array.from(completed);
@@ -411,6 +492,44 @@ function areaForNewNote(activeArea: AreaId, areas: Area[]): Area {
 
 function dailyTitle(date: Date): string {
   return `${DAILY_TITLE_PREFIX}${localDateKey(date)}`;
+}
+
+async function getPeriodicTemplate(kind: PeriodicNoteKind): Promise<NoteTemplate> {
+  const expectedName =
+    kind === "daily" ? "Nota diaria" : "Planificación semanal";
+  const templates = await getTemplates();
+  const template = templates.find(
+    (item) => item.name.trim().toLocaleLowerCase("es") === expectedName.toLocaleLowerCase("es")
+  );
+  if (template) return template;
+
+  const fallback = NOTE_TEMPLATES.find(
+    (item) => item.name.toLocaleLowerCase("es") === expectedName.toLocaleLowerCase("es")
+  );
+  if (!fallback) {
+    throw new Error(`No se encontró la plantilla predeterminada "${expectedName}".`);
+  }
+  return fallback;
+}
+
+function carryForwardCustomSections(
+  templateContent: string,
+  existingContent: string,
+  generatedTitles: string[]
+): string {
+  let content = normalizeMarkdown(templateContent);
+  const existing = normalizeMarkdown(existingContent);
+  const generated = new Set(generatedTitles.map((title) => title.toLocaleLowerCase("es")));
+
+  for (const heading of readHeadings(existing).filter((item) => item.level === 2)) {
+    const title = heading.title.toLocaleLowerCase("es");
+    if (generated.has(title) || findSection(content, heading.title)) continue;
+    const section = findSection(existing, heading.title);
+    if (!section) continue;
+    const savedSection = existing.slice(heading.start, section.end).trim();
+    if (savedSection) content = `${content.trim()}\n\n${savedSection}`;
+  }
+  return content;
 }
 
 export async function createOrOpenPeriodicNote(
@@ -431,12 +550,14 @@ export async function createOrOpenPeriodicNote(
   }
 
   const area = areaForNewNote(activeArea, areas);
-  const snapshot = await loadSnapshot(kind, areas);
-  const mode: ContentMode = "html";
+  const [template, snapshot] = await Promise.all([
+    getPeriodicTemplate(kind),
+    loadSnapshot(kind, areas),
+  ]);
   const content =
     kind === "daily"
-      ? dailyContent(snapshot, mode)
-      : weeklyContent(snapshot, mode);
+      ? dailyContent(snapshot, template.content)
+      : weeklyContent(snapshot, template.content);
   return createNote(area.slug, title, content, key);
 }
 
@@ -446,30 +567,50 @@ export async function synchronizePeriodicNote(
 ): Promise<string> {
   const kind: PeriodicNoteKind =
     note.periodic_key?.startsWith("daily:") ? "daily" : "weekly";
-  const snapshot = await loadSnapshot(kind, areas);
-  const mode = contentMode(note.content);
+  const [template, snapshot] = await Promise.all([
+    getPeriodicTemplate(kind),
+    loadSnapshot(kind, areas),
+  ]);
+  const existingContent = normalizeMarkdown(note.content);
   let content: string;
 
   if (kind === "daily") {
-    const journal =
-      extractSection(note.content, "Bitácora / Notas rápidas del día") ??
-      (mode === "html" ? "<p></p>" : "");
-    content = dailyContent(snapshot, mode, journal);
+    const templateContent = carryForwardCustomSections(
+      template.content,
+      existingContent,
+      [
+        "Agenda de hoy",
+        "Tareas pendientes / para hoy",
+        "Bitácora / Notas rápidas del día",
+      ]
+    );
+    const journal = extractSection(
+      existingContent,
+      "Bitácora / Notas rápidas del día"
+    );
+    content = dailyContent(snapshot, templateContent, journal);
   } else {
     const dayNotes = new Map<string, string>();
     for (const day of snapshot.days) {
       const key = localDateKey(day);
-      const saved = extractSection(note.content, `Notas del día: ${key}`);
+      const saved = extractSection(existingContent, `Notas del día: ${key}`);
       if (saved !== undefined) dayNotes.set(key, saved);
     }
-    content = weeklyContent(snapshot, mode, {
-      focus:
-        extractSection(note.content, "Foco de la semana") ??
-        (mode === "html" ? "<p></p>" : ""),
-      fixedNotes:
-        extractSection(note.content, "Notas fijas") ??
-        (mode === "html" ? "<p></p>" : ""),
-      archive: extractSection(note.content, "Archivo de completados"),
+    const templateContent = carryForwardCustomSections(
+      template.content,
+      existingContent,
+      [
+        "Foco de la semana",
+        "Agenda y plan diario",
+        "Pendientes generales",
+        "Notas fijas",
+        "Archivo de completados",
+      ]
+    );
+    content = weeklyContent(snapshot, templateContent, {
+      focus: extractSection(existingContent, "Foco de la semana"),
+      fixedNotes: extractSection(existingContent, "Notas fijas"),
+      archive: extractSection(existingContent, "Archivo de completados"),
       dayNotes,
     });
   }
@@ -481,16 +622,28 @@ export async function resetWeeklyNote(
   note: Note,
   areas: Area[]
 ): Promise<string> {
-  const snapshot = await loadSnapshot("weekly", areas);
-  const mode = contentMode(note.content);
-  const completed = completedTaskTitles(note.content);
-  const previousArchive = extractSection(note.content, "Archivo de completados");
-  const newArchive = makeList(completed, mode);
+  const [template, snapshot] = await Promise.all([
+    getPeriodicTemplate("weekly"),
+    loadSnapshot("weekly", areas),
+  ]);
+  const existingContent = normalizeMarkdown(note.content);
+  const completed = completedTaskTitles(existingContent);
+  const previousArchive = extractSection(existingContent, "Archivo de completados");
+  const newArchive = makeList(completed);
   const archive = [previousArchive, newArchive].filter(Boolean).join("\n");
-  return weeklyContent(snapshot, mode, {
-    fixedNotes:
-      extractSection(note.content, "Notas fijas") ??
-      (mode === "html" ? "<p></p>" : ""),
+  const templateContent = carryForwardCustomSections(
+    template.content,
+    existingContent,
+    [
+      "Foco de la semana",
+      "Agenda y plan diario",
+      "Pendientes generales",
+      "Notas fijas",
+      "Archivo de completados",
+    ]
+  );
+  return weeklyContent(snapshot, templateContent, {
+    fixedNotes: extractSection(existingContent, "Notas fijas"),
     archive: archive || undefined,
   });
 }
