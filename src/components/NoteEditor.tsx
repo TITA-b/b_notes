@@ -48,6 +48,10 @@ import {
   getDriveImagePreviewUrl,
   getDriveViewUrl,
 } from "@/lib/driveMedia";
+import {
+  getDriveUploadHeaders,
+  validateDriveUploadSize,
+} from "@/lib/driveUpload";
 import { downloadNoteAsMarkdown } from "@/lib/exportNotes";
 import {
   MediaLightboxModal,
@@ -689,11 +693,11 @@ TaskItem.configure({
 
     try {
       for (const file of files) {
-        const formData = new FormData();
-        formData.append("file", file);
+        validateDriveUploadSize(file);
         const response = await fetch("/api/google/drive", {
           method: "POST",
-          body: formData,
+          headers: getDriveUploadHeaders(file),
+          body: file,
         });
         const data = (await response.json()) as DriveUploadResponse;
 

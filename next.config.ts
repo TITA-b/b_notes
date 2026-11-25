@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   output: "standalone",
   cacheComponents: true,
   partialPrefetching: true,
+  experimental: {
+    proxyClientMaxBodySize: "250mb",
+  },
   turbopack: {
     rules: {
       "*.css": {

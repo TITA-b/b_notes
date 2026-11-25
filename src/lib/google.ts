@@ -74,3 +74,13 @@ export async function getAuthenticatedDrive() {
     ? google.drive({ version: "v3", auth: oauth2Client })
     : null;
 }
+
+export async function getAuthenticatedDriveWithOAuthClient() {
+  const oauth2Client = await getAuthenticatedOAuthClient();
+  return oauth2Client
+    ? {
+        drive: google.drive({ version: "v3", auth: oauth2Client }),
+        oauthClient: oauth2Client,
+      }
+    : null;
+}

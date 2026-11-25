@@ -37,6 +37,10 @@ import {
   getDriveViewUrl,
 } from "@/lib/driveMedia";
 import {
+  getDriveUploadHeaders,
+  validateDriveUploadSize,
+} from "@/lib/driveUpload";
+import {
   MediaLightboxModal,
   type LightboxMedia,
 } from "@/components/MediaLightboxModal";
@@ -546,11 +550,11 @@ export function TaskBoard({
   }
 
   async function uploadFileToDrive(file: File): Promise<TaskAttachment> {
-    const formData = new FormData();
-    formData.append("file", file);
+    validateDriveUploadSize(file);
     const response = await fetch("/api/google/drive", {
       method: "POST",
-      body: formData,
+      headers: getDriveUploadHeaders(file),
+      body: file,
     });
     const data = (await response.json()) as DriveApiResponse;
     if (!response.ok || !data.file) {
