@@ -64,6 +64,7 @@ import {
   toggleTaskCompleted,
 } from "@/services/tasksService";
 import { getAreas } from "@/services/areasService";
+import { readJsonResponse } from "@/lib/readJsonResponse";
 import {
   getDriveImagePreviewUrl,
   getDriveViewUrl,
@@ -123,6 +124,9 @@ interface PendingAiAttachment {
   id: string;
   noteId: string;
   file: File;
+  fileId: string;
+  fileName: string;
+  mimeType: string;
   position: number;
   processing: boolean;
   error: string | null;
@@ -865,6 +869,9 @@ TaskItem.configure({
             id: globalThis.crypto.randomUUID(),
             noteId: note.id,
             file,
+            fileId: data.file.id,
+            fileName: data.file.name || file.name,
+            mimeType: data.file.mimeType || file.type,
             position: editor.state.selection.from,
             processing: false,
             error: null,
@@ -901,19 +908,19 @@ TaskItem.configure({
     setPendingAiAttachments(processingState);
 
     try {
-      const form = new FormData();
-      form.append("type", type);
-      form.append("file", pending.file);
       const response = await fetch("/api/ai/process-attachment", {
         method: "POST",
-        body: form,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type,
+          fileId: pending.fileId,
+          fileName: pending.fileName,
+          mimeType: pending.mimeType,
+        }),
       });
-      const result = (await response.json()) as {
-        error?: string;
-        html?: string;
-      };
-      if (!response.ok || !result.html) {
-        throw new Error(result.error ?? "No se pudo procesar el adjunto.");
+      const result = await readJsonResponse(response);
+      if (typeof result.html !== "string" || !result.html) {
+        throw new Error("El servidor no devolvió un resumen o transcripción.");
       }
 
       const current = pendingAiAttachmentsRef.current.find(

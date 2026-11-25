@@ -13,6 +13,7 @@ import {
 import { createNote } from "@/services/notesService";
 import { createTask } from "@/services/tasksService";
 import { getDriveUploadHeaders } from "@/lib/driveUpload";
+import { readJsonResponse } from "@/lib/readJsonResponse";
 import type { Area, AreaId, Note } from "@/types/note";
 import type { Task } from "@/types/task";
 
@@ -85,15 +86,13 @@ export function QuickCaptureModal({
         method: "POST",
         body: form,
       });
-      const result = (await response.json()) as {
-        error?: string;
-        markdown?: string;
-      };
-      if (!response.ok || !result.markdown) {
-        throw new Error(result.error ?? "No se pudo procesar el adjunto.");
+      const result = await readJsonResponse(response);
+      if (typeof result.markdown !== "string" || !result.markdown) {
+        throw new Error("El servidor no devolvió un resumen o transcripción.");
       }
+      const markdown = result.markdown.trim();
       setContent((current) =>
-        [current.trim(), result.markdown?.trim()].filter(Boolean).join("\n\n")
+        [current.trim(), markdown].filter(Boolean).join("\n\n")
       );
     } catch (processError) {
       setAttachmentError(
