@@ -9,25 +9,27 @@ export function PwaRegister() {
       void syncPendingOfflineMutations();
     };
 
+    let hasController = Boolean(
+      "serviceWorker" in navigator && navigator.serviceWorker.controller
+    );
+    let isReloading = false;
+    const handleControllerChange = () => {
+      if (!hasController) {
+        hasController = true;
+        return;
+      }
+      if (isReloading) return;
+      isReloading = true;
+      window.location.reload();
+    };
+
     if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener(
+        "controllerchange",
+        handleControllerChange
+      );
       void navigator.serviceWorker
         .register("/sw.js")
-        .then(async (registration) => {
-          const urls = performance
-            .getEntriesByType("resource")
-            .map((entry) => entry.name)
-            .filter((name) => {
-              const url = new URL(name, window.location.href);
-              return (
-                url.origin === window.location.origin &&
-                url.pathname.startsWith("/_next/static/")
-              );
-            });
-          const worker =
-            registration.active ??
-            (await navigator.serviceWorker.ready).active;
-          worker?.postMessage({ type: "CACHE_STATIC_ASSETS", urls });
-        })
         .catch((error: unknown) => {
           console.error(
             "No se pudo registrar el service worker de B_Notes.",
@@ -45,6 +47,12 @@ export function PwaRegister() {
       window.removeEventListener("online", sync);
       document.removeEventListener("visibilitychange", sync);
       window.clearInterval(retryInterval);
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.removeEventListener(
+          "controllerchange",
+          handleControllerChange
+        );
+      }
     };
   }, []);
 
