@@ -76,10 +76,17 @@ export async function getNotesByArea(area: AreaId): Promise<Note[]> {
 export async function createNote(
   area: AreaId,
   title = "Sin título",
-  content = ""
+  content = "",
+  periodicKey?: string
 ): Promise<Note> {
   const normalizedTitle = title.trim() || "Sin título";
-  const body = jsonBody({ area, title: normalizedTitle, content, links: [] });
+  const body = jsonBody({
+    area,
+    title: normalizedTitle,
+    content,
+    links: [],
+    periodic_key: periodicKey,
+  });
   try {
     const created = await apiRequest<Note>("/api/data/notes", {
       method: "POST",
@@ -97,6 +104,7 @@ export async function createNote(
       title: normalizedTitle,
       content,
       links: extractWikilinks(content),
+      periodic_key: periodicKey ?? null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -114,7 +122,7 @@ export async function createNote(
 
 export async function updateNote(
   id: string,
-  updates: { title?: string; content?: string }
+  updates: { title?: string; content?: string; periodic_key?: string | null }
 ): Promise<Note> {
   const body = jsonBody({
     id,

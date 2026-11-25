@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
+  CalendarDays,
+  CalendarRange,
   Download,
   Globe2,
   LogOut,
@@ -25,6 +27,8 @@ interface SidebarProps {
   areaManagerOpen: boolean;
   onAreaManagerOpenChange: (open: boolean) => void;
   onOpenTemplateManager: () => void;
+  onOpenDailyNote: () => void;
+  onOpenWeeklyNote: () => void;
   onSelectArea: (area: AreaId) => void;
   onAreasChanged: (areas: Area[], nextActiveArea?: string) => void;
 }
@@ -35,6 +39,8 @@ export function Sidebar({
   areaManagerOpen,
   onAreaManagerOpenChange,
   onOpenTemplateManager,
+  onOpenDailyNote,
+  onOpenWeeklyNote,
   onSelectArea,
   onAreasChanged,
 }: SidebarProps) {
@@ -117,6 +123,33 @@ export function Sidebar({
       </div>
 
       <nav aria-label="Áreas" className="flex flex-1 flex-col gap-1 px-3">
+        <div className="mb-2 rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-2">
+          <p className="px-2 pb-1.5 text-[10px] font-medium tracking-[0.14em] text-zinc-500 uppercase">
+            Acceso rápido
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              onOpenDailyNote();
+              setOpen(false);
+            }}
+            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2 text-left text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50"
+          >
+            <CalendarDays className="size-4 text-sky-400" />
+            Nota de hoy
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onOpenWeeklyNote();
+              setOpen(false);
+            }}
+            className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2 text-left text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-50"
+          >
+            <CalendarRange className="size-4 text-violet-400" />
+            Hoja semanal
+          </button>
+        </div>
         <button
           type="button"
           onClick={() => {

@@ -3,7 +3,7 @@ import { getAuthenticatedCalendar } from "@/lib/google";
 import { getCurrentUser } from "@/lib/auth";
 import { query } from "@/lib/db";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const calendar = await getAuthenticatedCalendar();
     if (!calendar) {
@@ -14,13 +14,37 @@ export async function GET() {
       });
     }
 
+    const timeMinParam = request.nextUrl.searchParams.get("timeMin");
+    const timeMaxParam = request.nextUrl.searchParams.get("timeMax");
+    if (Boolean(timeMinParam) !== Boolean(timeMaxParam)) {
+      return NextResponse.json(
+        { error: "timeMin y timeMax deben enviarse juntos." },
+        { status: 400 }
+      );
+    }
+
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
+    const timeMin = timeMinParam ? new Date(timeMinParam) : startOfToday;
+    const timeMax = timeMaxParam ? new Date(timeMaxParam) : undefined;
+    if (
+      Number.isNaN(timeMin.getTime()) ||
+      (timeMax &&
+        (Number.isNaN(timeMax.getTime()) ||
+          timeMax <= timeMin ||
+          timeMax.getTime() - timeMin.getTime() > 31 * 24 * 60 * 60 * 1000))
+    ) {
+      return NextResponse.json(
+        { error: "El rango de fechas de Calendar no es válido." },
+        { status: 400 }
+      );
+    }
 
     const res = await calendar.events.list({
       calendarId: "primary",
-      timeMin: startOfToday.toISOString(),
-      maxResults: 50,
+      timeMin: timeMin.toISOString(),
+      ...(timeMax ? { timeMax: timeMax.toISOString() } : {}),
+      maxResults: timeMax ? 250 : 50,
       singleEvents: true,
       orderBy: "startTime",
     });

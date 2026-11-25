@@ -45,11 +45,13 @@ export async function ensureDatabaseSchema(): Promise<void> {
           title text NOT NULL,
           content text NOT NULL DEFAULT '',
           links jsonb NOT NULL DEFAULT '[]'::jsonb,
+          periodic_key text,
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz NOT NULL DEFAULT now(),
           FOREIGN KEY (user_id, area) REFERENCES areas(user_id, slug)
             ON UPDATE CASCADE ON DELETE RESTRICT
         );
+        ALTER TABLE notes ADD COLUMN IF NOT EXISTS periodic_key TEXT;
         CREATE TABLE IF NOT EXISTS tasks (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -96,6 +98,9 @@ export async function ensureDatabaseSchema(): Promise<void> {
           ON areas(user_id, position);
         CREATE INDEX IF NOT EXISTS notes_user_area_updated_idx
           ON notes(user_id, area, updated_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS notes_user_periodic_key_unique_idx
+          ON notes(user_id, periodic_key)
+          WHERE periodic_key IS NOT NULL;
         CREATE INDEX IF NOT EXISTS tasks_user_area_due_idx
           ON tasks(user_id, area, completed, due_date, created_at DESC);
         CREATE INDEX IF NOT EXISTS tasks_user_gcal_event_idx

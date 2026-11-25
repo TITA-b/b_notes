@@ -22,7 +22,6 @@
 
 # misc
 .DS_Store
-*.pem
 
 # debug
 npm-debug.log*
@@ -30,10 +29,16 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
-.env
-.env.*
+# local environment and credentials
+.env*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+client_secret*.json
+token.json
 
 # local backups
 /backups/

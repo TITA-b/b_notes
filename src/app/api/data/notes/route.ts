@@ -31,7 +31,13 @@ export async function POST(request: Request) {
   const auth = await authenticateDataRequest();
   if (auth.response) return auth.response;
 
-  let body: { area?: unknown; title?: unknown; content?: unknown; links?: unknown };
+  let body: {
+    area?: unknown;
+    title?: unknown;
+    content?: unknown;
+    links?: unknown;
+    periodic_key?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
@@ -42,16 +48,50 @@ export async function POST(request: Request) {
     typeof body.title !== "string" ||
     !body.title.trim() ||
     (body.content !== undefined && typeof body.content !== "string") ||
-    (body.links !== undefined && !Array.isArray(body.links))
+    (body.links !== undefined && !Array.isArray(body.links)) ||
+    (body.periodic_key !== undefined &&
+      body.periodic_key !== null &&
+      (typeof body.periodic_key !== "string" ||
+        !/^(?:daily:\d{4}-\d{2}-\d{2}|weekly:current)$/.test(
+          body.periodic_key
+        )))
   ) {
     return invalidRequest("Faltan datos válidos para crear la nota.");
   }
 
+  const periodicKey =
+    typeof body.periodic_key === "string" ? body.periodic_key : null;
   const { rows } = await query<Note>(
-    "INSERT INTO notes (user_id, area, title, content, links) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-    [auth.user.id, body.area, body.title.trim(), body.content ?? "", body.links ?? []]
+    `INSERT INTO notes (user_id, area, title, content, links, periodic_key)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ${
+       periodicKey
+         ? "ON CONFLICT (user_id, periodic_key) WHERE periodic_key IS NOT NULL DO NOTHING"
+         : ""
+     }
+     RETURNING *`,
+    [
+      auth.user.id,
+      body.area,
+      body.title.trim(),
+      body.content ?? "",
+      body.links ?? [],
+      periodicKey,
+    ]
   );
-  return NextResponse.json(rows[0], { status: 201 });
+  if (rows[0]) return NextResponse.json(rows[0], { status: 201 });
+  const existing = await query<Note>(
+    "SELECT * FROM notes WHERE user_id = $1 AND periodic_key = $2",
+    [auth.user.id, periodicKey]
+  );
+  if (!existing.rows[0]) {
+    console.error("Periodic note conflict returned no existing note.");
+    return NextResponse.json(
+      { error: "No se pudo recuperar la nota periódica." },
+      { status: 500 }
+    );
+  }
+  return NextResponse.json(existing.rows[0]);
 }
 
 export async function PATCH(request: Request) {
@@ -63,6 +103,7 @@ export async function PATCH(request: Request) {
     title?: unknown;
     content?: unknown;
     links?: unknown;
+    periodic_key?: unknown;
   };
   try {
     body = await request.json();
@@ -87,6 +128,18 @@ export async function PATCH(request: Request) {
       return invalidRequest("Los enlaces de la nota no son válidos.");
     }
     updates.push(["links", JSON.stringify(body.links)]);
+  }
+  if (body.periodic_key !== undefined) {
+    if (
+      body.periodic_key !== null &&
+      (typeof body.periodic_key !== "string" ||
+        !/^(?:daily:\d{4}-\d{2}-\d{2}|weekly:current)$/.test(
+          body.periodic_key
+        ))
+    ) {
+      return invalidRequest("La clave de nota periódica no es válida.");
+    }
+    updates.push(["periodic_key", body.periodic_key]);
   }
   if (updates.length === 0) return invalidRequest("No hay cambios para guardar.");
 

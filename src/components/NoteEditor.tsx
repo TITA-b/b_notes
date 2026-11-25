@@ -49,6 +49,8 @@ import {
   Play,
   Plus,
   Circle,
+  RefreshCw,
+  RotateCcw,
   Trash2,
 } from "lucide-react";
 import {
@@ -74,6 +76,11 @@ import {
   MediaLightboxModal,
   type LightboxMedia,
 } from "@/components/MediaLightboxModal";
+import { ConfirmDeleteModal } from "@/components/ConfirmDeleteModal";
+import {
+  resetWeeklyNote,
+  synchronizePeriodicNote,
+} from "@/lib/periodicNotes";
 import type { Area, Note } from "@/types/note";
 import type { Task } from "@/types/task";
 
@@ -333,6 +340,10 @@ export function NoteEditor({
   );
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [hasTextSelection, setHasTextSelection] = useState(false);
+  const [periodicSyncing, setPeriodicSyncing] = useState(false);
+  const [weeklyResetOpen, setWeeklyResetOpen] = useState(false);
+  const [weeklyResetting, setWeeklyResetting] = useState(false);
+  const [periodicError, setPeriodicError] = useState<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNoteId = useRef(note.id);
   const openWikilinkRef = useRef(onOpenWikilink);
@@ -363,6 +374,11 @@ export function NoteEditor({
   const handleWikilinkKeyDownRef = useRef<(event: KeyboardEvent) => boolean>(
     () => false
   );
+  const periodicKind = note.periodic_key?.startsWith("daily:")
+    ? "daily"
+    : note.periodic_key === "weekly:current"
+      ? "weekly"
+      : null;
 
   useEffect(() => {
     openWikilinkRef.current = onOpenWikilink;
@@ -951,6 +967,58 @@ TaskItem.configure({
     }
   }
 
+  function getCurrentEditorContent(): string {
+    const storage = editor?.storage as
+      | { markdown?: { getMarkdown: () => string } }
+      | undefined;
+    return normalizeWikilinkMarkdown(
+      storage?.markdown?.getMarkdown() ?? note.content
+    );
+  }
+
+  async function handleSynchronizePeriodicNote() {
+    if (!periodicKind || periodicSyncing) return;
+    setPeriodicSyncing(true);
+    setPeriodicError(null);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    try {
+      const currentNote = { ...note, content: getCurrentEditorContent() };
+      const content = await synchronizePeriodicNote(currentNote, areas);
+      await onSave(note.id, { content });
+      setStatus("saved");
+    } catch (error: unknown) {
+      setPeriodicError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo sincronizar la nota periódica."
+      );
+    } finally {
+      setPeriodicSyncing(false);
+    }
+  }
+
+  async function handleResetWeeklyNote() {
+    if (periodicKind !== "weekly" || weeklyResetting) return;
+    setWeeklyResetting(true);
+    setPeriodicError(null);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    try {
+      const currentNote = { ...note, content: getCurrentEditorContent() };
+      const content = await resetWeeklyNote(currentNote, areas);
+      await onSave(note.id, { content });
+      setStatus("saved");
+      setWeeklyResetOpen(false);
+    } catch (error: unknown) {
+      setPeriodicError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo resetear la hoja semanal."
+      );
+    } finally {
+      setWeeklyResetting(false);
+    }
+  }
+
   function handleTitleChange(newTitle: string) {
     setTitle(newTitle);
     scheduleSave({ title: newTitle.trim() || "Sin título" });
@@ -1077,6 +1145,30 @@ TaskItem.configure({
         </div>
 
         <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+          {periodicKind ? (
+            <button
+              type="button"
+              onClick={() => void handleSynchronizePeriodicNote()}
+              disabled={periodicSyncing || status === "saving"}
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100 disabled:opacity-50"
+            >
+              <RefreshCw
+                className={`size-3.5 ${periodicSyncing ? "animate-spin" : ""}`}
+              />
+              <span>{periodicSyncing ? "Sincronizando…" : "Sincronizar agenda"}</span>
+            </button>
+          ) : null}
+          {periodicKind === "weekly" ? (
+            <button
+              type="button"
+              onClick={() => setWeeklyResetOpen(true)}
+              disabled={weeklyResetting || status === "saving"}
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-100 disabled:opacity-50"
+            >
+              <RotateCcw className="size-3.5" />
+              <span>Resetear semana</span>
+            </button>
+          ) : null}
           {onRequestDelete ? (
             <button
               type="button"
@@ -1135,6 +1227,14 @@ TaskItem.configure({
           className="border-b border-amber-900/70 bg-amber-950/30 px-5 py-2 text-xs text-amber-200 md:px-10"
         >
           {wikilinkOperationError}
+        </p>
+      ) : null}
+      {periodicError ? (
+        <p
+          role="alert"
+          className="border-b border-amber-900/70 bg-amber-950/30 px-5 py-2 text-xs text-amber-200 md:px-10"
+        >
+          {periodicError}
         </p>
       ) : null}
 
@@ -1453,6 +1553,16 @@ TaskItem.configure({
           ) : null}
         </section>
       </div>
+      <ConfirmDeleteModal
+        open={weeklyResetOpen}
+        title="Resetear hoja semanal"
+        description="Se actualizarán la agenda y las tareas. Las tareas marcadas como completadas se archivarán y se conservarán las notas fijas."
+        confirmLabel="Resetear semana"
+        loadingLabel="Actualizando…"
+        loading={weeklyResetting}
+        onConfirm={handleResetWeeklyNote}
+        onClose={() => setWeeklyResetOpen(false)}
+      />
     </div>
   );
 }

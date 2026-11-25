@@ -20,6 +20,7 @@ export interface Note {
   title: string;
   content: string;
   links: string[];
+  periodic_key?: string | null;
   created_at: string;
   updated_at: string;
 }

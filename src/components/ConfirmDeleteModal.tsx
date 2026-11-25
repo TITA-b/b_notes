@@ -7,6 +7,7 @@ interface ConfirmDeleteModalProps {
   title: string;
   description: string;
   confirmLabel?: string;
+  loadingLabel?: string;
   loading?: boolean;
   onConfirm: () => void | Promise<void>;
   onClose: () => void;
@@ -17,6 +18,7 @@ export function ConfirmDeleteModal({
   title,
   description,
   confirmLabel = "Eliminar",
+  loadingLabel = "Eliminando…",
   loading = false,
   onConfirm,
   onClose,
@@ -75,7 +77,7 @@ export function ConfirmDeleteModal({
             onClick={() => void onConfirm()}
             className="h-9 rounded-lg bg-red-500 px-3.5 text-xs font-semibold text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {loading ? "Eliminando…" : confirmLabel}
+            {loading ? loadingLabel : confirmLabel}
           </button>
         </div>
       </section>

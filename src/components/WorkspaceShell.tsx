@@ -25,6 +25,10 @@ import { QuickCaptureModal } from "@/components/QuickCaptureModal";
 import { TemplateManagerModal } from "@/components/TemplateManagerModal";
 import { getAreas } from "@/services/areasService";
 import { getNoteTemplatesForArea } from "@/lib/noteTemplates";
+import {
+  createOrOpenPeriodicNote,
+  type PeriodicNoteKind,
+} from "@/lib/periodicNotes";
 import { getTemplates } from "@/services/templatesService";
 import {
   createNote,
@@ -84,6 +88,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [isOffline, setIsOffline] = useState(false);
   const [syncStatus, setSyncStatus] = useState<OfflineSyncStatus>("idle");
   const [shareCaptureError, setShareCaptureError] = useState<string | null>(null);
+  const [periodicNoteError, setPeriodicNoteError] = useState<string | null>(null);
   const [tasksRefreshKey, setTasksRefreshKey] = useState(0);
   const historyLayersRef = useRef<string[]>([]);
   const skipNextPopRef = useRef(false);
@@ -641,6 +646,45 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     updateNotes,
   ]);
 
+  const handleOpenPeriodicNote = useCallback(
+    async (kind: PeriodicNoteKind) => {
+      setPeriodicNoteError(null);
+      try {
+        const note = await createOrOpenPeriodicNote(kind, activeArea, areas);
+        handleSelectNote(note);
+      } catch (error: unknown) {
+        setPeriodicNoteError(
+          error instanceof Error
+            ? error.message
+            : "No se pudo abrir la nota periódica."
+        );
+      }
+    },
+    [activeArea, areas, handleSelectNote]
+  );
+
+  useEffect(() => {
+    function handlePeriodicNoteShortcut(event: KeyboardEvent) {
+      if (
+        !event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "d" || key === "w") {
+        event.preventDefault();
+        void handleOpenPeriodicNote(key === "d" ? "daily" : "weekly");
+      }
+    }
+
+    window.addEventListener("keydown", handlePeriodicNoteShortcut);
+    return () =>
+      window.removeEventListener("keydown", handlePeriodicNoteShortcut);
+  }, [handleOpenPeriodicNote]);
+
   useEffect(() => {
     if (areas.length === 0 || shareTargetHandledRef.current) return;
 
@@ -737,9 +781,9 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
   return (
     <div className="h-screen overflow-hidden bg-zinc-950 text-zinc-100 md:pl-72">
-      {areasError || shareCaptureError ? (
+      {areasError || shareCaptureError || periodicNoteError ? (
         <p role="alert" className="fixed top-16 right-4 z-[60] rounded-lg border border-red-900/70 bg-zinc-950 px-3 py-2 text-xs text-red-300">
-          {areasError ?? shareCaptureError}
+          {areasError ?? shareCaptureError ?? periodicNoteError}
         </p>
       ) : null}
       <Sidebar
@@ -747,6 +791,8 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         activeArea={activeArea}
         areaManagerOpen={areaManagerOpen}
         onOpenTemplateManager={openTemplateManager}
+        onOpenDailyNote={() => void handleOpenPeriodicNote("daily")}
+        onOpenWeeklyNote={() => void handleOpenPeriodicNote("weekly")}
         onAreaManagerOpenChange={(open) => {
           if (open && !areaManagerOpen) pushHistoryLayer("area-manager");
           if (!open) closeHistoryLayer("area-manager");
