@@ -107,6 +107,8 @@ Para usar B_Notes desde el celular fuera de tu red local (con micrófono habilit
 
 4. Abrí la URL generada (`[https://TU-EQUIPO.tailXXXX.ts.net](https://TU-EQUIPO.tailXXXX.ts.net)`) en Chrome de Android, iniciá sesión y tocá **`⋮` → Instalar aplicación**.
 
+Después de abrir la aplicación al menos una vez con conexión, B_Notes conserva en el dispositivo la interfaz y los recursos estáticos para volver a abrirla sin red. Las áreas, notas y tareas consultadas también quedan disponibles localmente; las notas editadas y las tareas creadas offline se encolan y se sincronizan al recuperar la conexión. El indicador de la barra superior muestra si está sin conexión o sincronizando cambios pendientes.
+
 ## 5. Respaldos automáticos y restauración
 
 ### Backup diario en Windows (`backup-bnotes.ps1`)
