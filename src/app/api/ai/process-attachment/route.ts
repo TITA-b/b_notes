@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { PDFParse } from "pdf-parse";
+import { extractText } from "unpdf";
 import { getCurrentUser } from "@/lib/auth";
 import { getAuthenticatedDrive } from "@/lib/google";
 import { extractDriveFileId } from "@/lib/driveMedia";
@@ -97,20 +97,19 @@ function getStringField(
 }
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
-  try {
-    const result = await parser.getText();
-    return result.text
-      .replace(/\r\n?/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim()
-      .slice(0, MAX_EXTRACTED_TEXT_CHARS);
-  } finally {
-    await parser.destroy();
-  }
+  const result = await extractText(new Uint8Array(buffer), {
+    mergePages: true,
+  });
+  return result.text
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, MAX_EXTRACTED_TEXT_CHARS);
 }
 
-async function readAttachment(request: Request): Promise<AttachmentInput | NextResponse> {
+async function readAttachment(
+  request: Request
+): Promise<AttachmentInput | NextResponse> {
   const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
   let fileName = "";
   let mimeType = "";
@@ -136,11 +135,12 @@ async function readAttachment(request: Request): Promise<AttachmentInput | NextR
     }
 
     const fileId =
-      typeof payload.fileId === "string" && payload.fileId.trim()
-        ? payload.fileId.trim()
-        : typeof payload.url === "string"
-          ? extractDriveFileId(payload.url)
-          : null;
+      (typeof payload.fileId === "string"
+        ? extractDriveFileId(payload.fileId)
+        : null) ??
+      (typeof payload.url === "string"
+        ? extractDriveFileId(payload.url)
+        : null);
     if (!fileId) {
       return NextResponse.json(
         { error: "Falta un identificador válido del archivo de Google Drive." },
@@ -278,18 +278,13 @@ async function processAttachment(request: Request): Promise<NextResponse> {
 
   let extractedText = attachment.suppliedText;
   if (attachment.type === "pdf" && attachment.buffer) {
-    try {
-      extractedText = await extractPdfText(attachment.buffer);
-    } catch (error) {
-      console.error("Could not extract text from PDF attachment:", error);
-      return NextResponse.json(
-        { error: "No se pudo leer el PDF. Verificá que no esté dañado." },
-        { status: 422 }
-      );
-    }
+    extractedText = await extractPdfText(attachment.buffer);
     if (!extractedText) {
       return NextResponse.json(
-        { error: "El PDF no contiene texto seleccionable para extraer." },
+        {
+          error:
+            "El PDF no contiene texto seleccionable (puede ser un documento escaneado).",
+        },
         { status: 422 }
       );
     }
@@ -303,20 +298,11 @@ async function processAttachment(request: Request): Promise<NextResponse> {
     );
   }
 
-  let areas: AvailableArea[];
-  try {
-    const result = await query<AvailableArea>(
-      "SELECT slug, name FROM areas WHERE user_id = $1 ORDER BY position ASC",
-      [user.id]
-    );
-    areas = result.rows;
-  } catch (error) {
-    console.error("Could not load areas for attachment processing:", error);
-    return NextResponse.json(
-      { error: "No se pudieron cargar las áreas de la cuenta." },
-      { status: 500 }
-    );
-  }
+  const areasResult = await query<AvailableArea>(
+    "SELECT slug, name FROM areas WHERE user_id = $1 ORDER BY position ASC",
+    [user.id]
+  );
+  const areas = areasResult.rows;
   if (areas.length === 0) {
     return NextResponse.json(
       { error: "No hay áreas configuradas para esta cuenta." },
@@ -369,66 +355,30 @@ async function processAttachment(request: Request): Promise<NextResponse> {
 
   let transcript = "";
   let summary = "";
-  try {
-    const n8nRes = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(90_000),
-    });
-    const rawText = await n8nRes.text();
-    if (!n8nRes.ok) {
-      return NextResponse.json(
-        {
-          error: `n8n devolvió estado ${n8nRes.status}: ${
-            rawText.slice(0, 300) || "Verificá que el workflow esté activo."
-          }`,
-        },
-        { status: 502 }
-      );
-    }
-    if (!rawText.trim()) {
-      return NextResponse.json(
-        { error: "n8n devolvió una respuesta vacía al procesar el adjunto." },
-        { status: 502 }
-      );
-    }
+  const n8nRes = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(90_000),
+  });
+  const rawText = await n8nRes.text();
+  if (!n8nRes.ok) {
+    throw new Error(rawText || `n8n devolvió estado ${n8nRes.status}.`);
+  }
+  if (!rawText.trim()) {
+    throw new Error("n8n devolvió una respuesta vacía al procesar el adjunto.");
+  }
 
-    let responseBody: unknown;
-    try {
-      responseBody = JSON.parse(rawText);
-    } catch {
-      return NextResponse.json(
-        { error: "n8n devolvió una respuesta JSON no válida." },
-        { status: 502 }
-      );
-    }
-    const result = readReply(responseBody);
-    summary = getStringField(result, "reply", "output", "text");
-    transcript = getStringField(result, "transcript");
-    if (attachment.type === "audio" && !transcript) {
-      transcript = summary;
-      summary = "";
-    }
-    if (!summary && !transcript) {
-      return NextResponse.json(
-        { error: "n8n respondió sin una transcripción o resumen válido." },
-        { status: 502 }
-      );
-    }
-  } catch (error) {
-    console.error("Could not process attachment through n8n:", error);
-    const timedOut =
-      error instanceof Error &&
-      (error.name === "TimeoutError" || error.name === "AbortError");
-    return NextResponse.json(
-      {
-        error: timedOut
-          ? "n8n tardó demasiado en procesar el adjunto. Intentá nuevamente."
-          : "No se pudo conectar con n8n para procesar el adjunto.",
-      },
-      { status: 502 }
-    );
+  const responseBody: unknown = JSON.parse(rawText);
+  const result = readReply(responseBody);
+  summary = getStringField(result, "reply", "output", "text");
+  transcript = getStringField(result, "transcript");
+  if (attachment.type === "audio" && !transcript) {
+    transcript = summary;
+    summary = "";
+  }
+  if (!summary && !transcript) {
+    throw new Error("n8n respondió sin una transcripción o resumen válido.");
   }
 
   const sections: { markdown: string; html: string }[] = [];
@@ -466,10 +416,19 @@ async function processAttachment(request: Request): Promise<NextResponse> {
 export async function POST(request: Request) {
   try {
     return await processAttachment(request);
-  } catch (error) {
-    console.error("Unexpected error processing attachment:", error);
+  } catch (err: unknown) {
+    console.error("[process-attachment]", err);
+    const errorMessage =
+      err instanceof Error
+        ? err.message
+        : isRecord(err) && typeof err.message === "string"
+          ? err.message
+          : "";
     return NextResponse.json(
-      { error: "Ocurrió un error inesperado al procesar el adjunto." },
+      {
+        error:
+          errorMessage || String(err) || "Error interno desconocido",
+      },
       { status: 500 }
     );
   }
