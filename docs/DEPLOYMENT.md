@@ -164,7 +164,7 @@ El acceso al micrófono desde el navegador requiere un contexto seguro, normalme
 
 ## Checklist de despliegue y primer backup
 
-- [ ] Cloná el repositorio en el servidor o Mini PC y confirmá que estén `docker-compose.yml`, `Dockerfile` y los scripts de backup.
+- [ ] Cloná el repositorio en el servidor o Mini PC y confirmá que estén `docker-compose.yml`, `Dockerfile` y `scripts/backup-bnotes.ps1` / `scripts/backup-bnotes.sh`.
 - [ ] Instalá Docker Engine/Desktop y Compose v2; comprobá que el servidor tenga espacio persistente y que los puertos requeridos estén disponibles.
 - [ ] Copiá `.env.example` a `.env`; definí `POSTGRES_PASSWORD` y `AUTH_SECRET` seguros. No agregues `.env` al repositorio.
 - [ ] Si vas a usar IA o Google, configurá `N8N_WEBHOOK_URL`, credenciales de Groq, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y la URI OAuth del dominio elegido.
@@ -174,8 +174,8 @@ El acceso al micrófono desde el navegador requiere un contexto seguro, normalme
 - [ ] Probá el workflow de n8n y las integraciones opcionales de Calendar/Drive antes de depender de ellas.
 - [ ] Elegí un destino de backup protegido: Google Drive `Backups_B_Notes`, `BNOTES_BACKUP_DIR` o la carpeta local `backups/`.
 - [ ] Ejecutá manualmente el script del sistema operativo y confirmá que genere tanto el dump PostgreSQL como el archivo del volumen `n8n_data`:
-  - Windows: `.\backup-bnotes.ps1`
-  - macOS/Linux: `./backup-bnotes.sh`
+  - Windows: `.\scripts\backup-bnotes.ps1`
+  - macOS/Linux: `./scripts/backup-bnotes.sh`
 - [ ] Revisá que ambos archivos de la misma fecha existan, tengan tamaño mayor que cero y se puedan listar/descomprimir. Tratá los respaldos como datos privados.
 - [ ] Programá la ejecución diaria con Task Scheduler (Windows) o `crontab` (macOS/Linux), usando el mismo usuario que tiene acceso a Docker y al destino.
 - [ ] Ejecutá la tarea programada una vez y confirmá su resultado, fecha de los archivos y retención de respaldos antiguos.

@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 
 function Invoke-DockerToFile {
     param(
@@ -56,7 +57,11 @@ if ([string]::IsNullOrWhiteSpace($backupDirectory)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($backupDirectory)) {
-    $backupDirectory = Join-Path $PSScriptRoot 'backups'
+    $backupDirectory = Join-Path $projectRoot 'backups'
+}
+
+if (-not [System.IO.Path]::IsPathRooted($backupDirectory)) {
+    $backupDirectory = Join-Path $projectRoot $backupDirectory
 }
 
 $backupDirectory = [System.IO.Path]::GetFullPath($backupDirectory)
@@ -67,7 +72,7 @@ $sqlFile = Join-Path $backupDirectory "bnotes_$timestamp.sql"
 $sqlArchive = "$sqlFile.zip"
 $n8nArchive = Join-Path $backupDirectory "n8n_$timestamp.tar.gz"
 
-Push-Location $PSScriptRoot
+Push-Location $projectRoot
 try {
     try {
         Invoke-DockerToFile `

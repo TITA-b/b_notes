@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BACKUP_DIR="${BNOTES_BACKUP_DIR:-}"
 
 if [[ -z "$BACKUP_DIR" && "$(uname -s)" == "Darwin" ]]; then
@@ -19,7 +19,9 @@ if [[ -z "$BACKUP_DIR" && "$(uname -s)" == "Darwin" ]]; then
 fi
 
 if [[ -z "$BACKUP_DIR" ]]; then
-  BACKUP_DIR="$SCRIPT_DIR/backups"
+  BACKUP_DIR="$PROJECT_DIR/backups"
+elif [[ "$BACKUP_DIR" != /* ]]; then
+  BACKUP_DIR="$PROJECT_DIR/$BACKUP_DIR"
 fi
 
 mkdir -p "$BACKUP_DIR"
@@ -28,7 +30,7 @@ DATE="$(date +%Y-%m-%d_%H-%M-%S)"
 POSTGRES_ARCHIVE="$BACKUP_DIR/bnotes_postgres_$DATE.sql.gz"
 N8N_ARCHIVE="$BACKUP_DIR/n8n_data_$DATE.tar.gz"
 
-cd "$SCRIPT_DIR"
+cd "$PROJECT_DIR"
 n8n_container="$(docker compose ps -a -q n8n)"
 if [[ -z "$n8n_container" ]]; then
   printf '%s\n' "No existe el contenedor de n8n. Iniciá el stack antes de respaldar." >&2

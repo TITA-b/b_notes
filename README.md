@@ -32,7 +32,7 @@ graph LR
   PushService -->|"evento push"| SW["Service Worker<br/>public/sw.js"]
   SW -->|"clic de notificación"| Client
   Watchtower["Watchtower"] -->|"Actualiza imagen GHCR"| App
-  Scheduler["Task Scheduler / crontab"] --> Backup["backup-bnotes.ps1 / backup-bnotes.sh"]
+  Scheduler["Task Scheduler / crontab"] --> Backup["scripts/backup-bnotes.ps1 / scripts/backup-bnotes.sh"]
   PG --> Backup
   N8NData[("volumen n8n_data")] --> Backup
   Backup --> Drive[("Google Drive<br/>Backups_B_Notes")]
@@ -122,7 +122,7 @@ Abrí `http://localhost:3000` y creá tu cuenta local. Para publicar la aplicaci
 | `VAPID_PRIVATE_KEY` | Clave privada para firmar notificaciones | Opcional; mantener secreta y fuera de Git |
 | `VAPID_SUBJECT` | Contacto VAPID (`mailto:` o URL HTTPS) | `mailto:admin@bnotes.local` |
 | `INTERNAL_PUSH_SECRET` | Autenticación de notificaciones disparadas desde n8n | Opcional; secreto aleatorio, enviar en `x-internal-secret` |
-| `BNOTES_BACKUP_DIR` | Carpeta destino de `backup-bnotes.ps1` / `backup-bnotes.sh` | Opcional; se detecta Google Drive en el script de Windows/macOS; si no, `./backups` |
+| `BNOTES_BACKUP_DIR` | Carpeta destino de `scripts/backup-bnotes.ps1` / `scripts/backup-bnotes.sh` | Opcional; se detecta Google Drive en el script de Windows/macOS; si no, `./backups` |
 | `DATABASE_URL` | Conexión para desarrollo local | Compose la construye a partir de `POSTGRES_PASSWORD`; `.env.example` la muestra como referencia |
 
 Generá el par VAPID una sola vez desde la raíz del proyecto con `npx web-push generate-vapid-keys`. Copiá la clave pública y privada a `.env`; nunca publiques la clave privada. Los pasos de configuración y activación en Android están en la [guía de despliegue](docs/DEPLOYMENT.md).
@@ -131,3 +131,5 @@ Generá el par VAPID una sola vez desde la raíz del proyecto con `npx web-push 
 
 - [Despliegue por sistema operativo, IA, Google y acceso móvil](docs/DEPLOYMENT.md)
 - [Backups automáticos y restauración/migración](docs/BACKUPS.md)
+
+> **GitHub Pages:** si el repositorio se hace público, se podrá habilitar Pages apuntando a `main` (`/`) y reutilizar este README como base de una portada web independiente.
