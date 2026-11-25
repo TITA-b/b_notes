@@ -855,10 +855,12 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         ) : activeTab === "tasks" ? (
           <div className="min-h-0 flex-1 overflow-hidden">
             <TaskBoard
-              key={`${activeArea}:${tasksRefreshKey}`}
               area={activeArea}
               areaName={activeAreaName}
               areas={areas}
+              notes={notes}
+              onSelectNote={handleSelectNote}
+              refreshKey={tasksRefreshKey}
               closeLightboxSignal={closeLightboxSignal}
               onLightboxChange={(open) => {
                 if (open && !lightboxOpen) pushHistoryLayer("lightbox");
@@ -1068,6 +1070,10 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
                   areas={areas}
                   onSave={handleSaveNote}
                   onOpenWikilink={handleOpenWikilink}
+                  onTasksChanged={() => {
+                    setTasksRefreshKey((key) => key + 1);
+                  }}
+                  tasksRefreshKey={tasksRefreshKey}
                   onBackMobile={closeMobileEditor}
                   onRequestDelete={requestNoteDelete}
                 />

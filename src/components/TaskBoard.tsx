@@ -9,6 +9,7 @@ import {
   Check,
   CheckCircle2,
   Circle,
+  FileText,
   ArrowDownLeft,
   ExternalLink,
   Paperclip,
@@ -29,7 +30,12 @@ import {
   updateTaskAttachments,
   updateTask,
 } from "@/services/tasksService";
-import { GENERAL_AREA_ID, type Area, type AreaId } from "@/types/note";
+import {
+  GENERAL_AREA_ID,
+  type Area,
+  type AreaId,
+  type Note,
+} from "@/types/note";
 import type { Task, TaskAttachment } from "@/types/task";
 import {
   getDriveImagePreviewUrl,
@@ -49,6 +55,9 @@ interface TaskBoardProps {
   area: AreaId;
   areaName: string;
   areas: Area[];
+  notes: Note[];
+  onSelectNote: (note: Note) => void;
+  refreshKey: number;
   closeLightboxSignal: number;
   onLightboxChange: (open: boolean) => void;
 }
@@ -240,10 +249,38 @@ function isOverdue(
   return new Date(iso).getTime() < currentTime;
 }
 
+function NoteSourceBadge({
+  task,
+  notesById,
+  onSelectNote,
+}: {
+  task: Task;
+  notesById: ReadonlyMap<string, Note>;
+  onSelectNote: (note: Note) => void;
+}) {
+  const note = task.noteId ? notesById.get(task.noteId) : undefined;
+  if (!note) return null;
+
+  return (
+    <button
+      type="button"
+      title={`Abrir nota: ${note.title}`}
+      onClick={() => onSelectNote(note)}
+      className="flex max-w-full items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-950/70 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200"
+    >
+      <FileText className="size-3 shrink-0" />
+      <span className="truncate">{note.title || "Sin título"}</span>
+    </button>
+  );
+}
+
 export function TaskBoard({
   area,
   areaName,
   areas,
+  notes,
+  onSelectNote,
+  refreshKey,
   closeLightboxSignal,
   onLightboxChange,
 }: TaskBoardProps) {
@@ -281,6 +318,7 @@ export function TaskBoard({
     ? selectedTaskArea
     : areas[0]?.slug ?? "";
   const areaBySlug = new Map(areas.map((candidate) => [candidate.slug, candidate]));
+  const notesById = new Map(notes.map((note) => [note.id, note]));
 
   useEffect(() => {
     const updateCurrentTime = () => setCurrentTime(Date.now());
@@ -410,7 +448,7 @@ export function TaskBoard({
     return () => {
       cancelled = true;
     };
-  }, [area, areas]);
+  }, [area, areas, refreshKey]);
 
   async function handleAdd(e: FormEvent) {
     e.preventDefault();
@@ -1133,7 +1171,12 @@ export function TaskBoard({
                           </div>
                         </div>
                       )}
-                      <div className="mt-2 pl-7">
+                      <div className="mt-2 space-y-2 pl-7">
+                        <NoteSourceBadge
+                          task={task}
+                          notesById={notesById}
+                          onSelectNote={onSelectNote}
+                        />
                         <AttachmentChips
                           attachments={
                             Array.isArray(task.attachments) ? task.attachments : []
@@ -1200,7 +1243,12 @@ export function TaskBoard({
                             <Trash2 className="size-3.5" />
                           </button>
                         </div>
-                        <div className="mt-2 pl-7">
+                        <div className="mt-2 space-y-2 pl-7">
+                          <NoteSourceBadge
+                            task={task}
+                            notesById={notesById}
+                            onSelectNote={onSelectNote}
+                          />
                           <AttachmentChips
                             attachments={
                               Array.isArray(task.attachments) ? task.attachments : []

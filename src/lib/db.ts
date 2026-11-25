@@ -60,10 +60,12 @@ export async function ensureDatabaseSchema(): Promise<void> {
           sync_to_gcal boolean NOT NULL DEFAULT false,
           gcal_event_id text,
           attachments jsonb NOT NULL DEFAULT '[]'::jsonb,
+          note_id text,
           created_at timestamptz NOT NULL DEFAULT now(),
           FOREIGN KEY (user_id, area) REFERENCES areas(user_id, slug)
             ON UPDATE CASCADE ON DELETE RESTRICT
         );
+        ALTER TABLE tasks ADD COLUMN IF NOT EXISTS note_id TEXT;
         CREATE TABLE IF NOT EXISTS note_templates (
           id text NOT NULL,
           user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -98,6 +100,8 @@ export async function ensureDatabaseSchema(): Promise<void> {
           ON tasks(user_id, area, completed, due_date, created_at DESC);
         CREATE INDEX IF NOT EXISTS tasks_user_gcal_event_idx
           ON tasks(user_id, gcal_event_id);
+        CREATE INDEX IF NOT EXISTS tasks_user_note_idx
+          ON tasks(user_id, note_id);
         CREATE INDEX IF NOT EXISTS note_templates_user_position_idx
           ON note_templates(user_id, position);
         CREATE INDEX IF NOT EXISTS ai_messages_user_created_idx

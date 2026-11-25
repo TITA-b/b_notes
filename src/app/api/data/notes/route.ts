@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Note } from "@/types/note";
 import { authenticateDataRequest, invalidRequest, notFound } from "@/app/api/data/_lib";
-import { query } from "@/lib/db";
+import { query, withTransaction } from "@/lib/db";
 
 export async function GET(request: Request) {
   const auth = await authenticateDataRequest();
@@ -112,6 +112,28 @@ export async function DELETE(request: Request) {
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return invalidRequest("Falta el identificador de la nota.");
 
-  await query("DELETE FROM notes WHERE user_id = $1 AND id = $2", [auth.user.id, id]);
-  return new NextResponse(null, { status: 204 });
+  try {
+    await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        "SELECT id FROM notes WHERE user_id = $1 AND id = $2 FOR UPDATE",
+        [auth.user.id, id]
+      );
+      if (!rows[0]) return;
+      await client.query(
+        "UPDATE tasks SET note_id = NULL WHERE user_id = $1 AND note_id = $2",
+        [auth.user.id, id]
+      );
+      await client.query(
+        "DELETE FROM notes WHERE user_id = $1 AND id = $2",
+        [auth.user.id, id]
+      );
+    });
+    return new NextResponse(null, { status: 204 });
+  } catch (error) {
+    console.error("Error deleting note from PostgreSQL:", error);
+    return NextResponse.json(
+      { error: "No se pudo eliminar la nota." },
+      { status: 500 }
+    );
+  }
 }

@@ -15,6 +15,7 @@ import {
 } from "@/services/offlineSync";
 
 const TASKS_CACHE_KEY = "bnotes_cache_tasks";
+const NOTES_CACHE_KEY = "bnotes_cache_notes";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -42,6 +43,9 @@ function isTask(value: unknown): value is Task {
     typeof value.sync_to_gcal === "boolean" &&
     (value.gcal_event_id === null || typeof value.gcal_event_id === "string") &&
     typeof value.created_at === "string" &&
+    (value.noteId === undefined ||
+      value.noteId === null ||
+      typeof value.noteId === "string") &&
     (value.attachments === undefined ||
       (Array.isArray(value.attachments) &&
         value.attachments.every(isTaskAttachment)))
@@ -99,11 +103,47 @@ export async function getTasksByArea(area: AreaId): Promise<Task[]> {
   }
 }
 
+export async function getTasksByNote(noteId: string): Promise<Task[]> {
+  try {
+    const tasks = requireTasks(
+      await apiRequest<unknown>(
+        `/api/data/tasks?note_id=${encodeURIComponent(noteId)}`
+      )
+    );
+    const cachedTasks = (readOfflineCache<unknown>(TASKS_CACHE_KEY) ?? []).filter(
+      isTask
+    );
+    const pendingIds = getPendingOfflineLocalIds(TASKS_CACHE_KEY);
+    const pendingTasks = cachedTasks.filter(
+      (task) => pendingIds.has(task.id) && task.noteId === noteId
+    );
+    const mergedTasks = [
+      ...pendingTasks,
+      ...tasks.filter((task) => !pendingIds.has(task.id)),
+    ];
+    writeOfflineCache(TASKS_CACHE_KEY, [
+      ...cachedTasks.filter((task) => task.noteId !== noteId),
+      ...mergedTasks,
+    ]);
+    return mergedTasks;
+  } catch (error) {
+    if (isNetworkFailure(error)) {
+      const cached = readOfflineCache<unknown>(TASKS_CACHE_KEY);
+      if (cached) {
+        notifyOfflineCacheUsed();
+        return cached.filter(isTask).filter((task) => task.noteId === noteId);
+      }
+    }
+    throw error;
+  }
+}
+
 export async function createTask(
   area: AreaId,
   title: string,
   dueDate?: string | null,
-  attachments: TaskAttachment[] = []
+  attachments: TaskAttachment[] = [],
+  noteId?: string | null
 ): Promise<Task> {
   const body = jsonBody({
     area,
@@ -112,18 +152,9 @@ export async function createTask(
     completed: false,
     sync_to_gcal: false,
     attachments,
+    noteId: noteId ?? null,
   });
-  try {
-    const created = requireTask(
-      await apiRequest<unknown>("/api/data/tasks", {
-        method: "POST",
-        body,
-      })
-    );
-    upsertOfflineCacheItem(TASKS_CACHE_KEY, created);
-    return created;
-  } catch (error) {
-    if (!isNetworkFailure(error)) throw error;
+  const createOfflineTask = () => {
     const cached = readOfflineCache<unknown>(TASKS_CACHE_KEY) ?? [];
     const existing = cached.find(isTask);
     const created: Task = {
@@ -135,6 +166,7 @@ export async function createTask(
       completed: false,
       sync_to_gcal: false,
       gcal_event_id: null,
+      noteId: noteId ?? null,
       created_at: new Date().toISOString(),
       attachments,
     };
@@ -147,12 +179,39 @@ export async function createTask(
     });
     upsertOfflineCacheItem(TASKS_CACHE_KEY, created);
     return created;
+  };
+
+  if (
+    noteId &&
+    getPendingOfflineLocalIds(NOTES_CACHE_KEY).has(noteId)
+  ) {
+    return createOfflineTask();
+  }
+
+  try {
+    const created = requireTask(
+      await apiRequest<unknown>("/api/data/tasks", {
+        method: "POST",
+        body,
+      })
+    );
+    upsertOfflineCacheItem(TASKS_CACHE_KEY, created);
+    return created;
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    return createOfflineTask();
   }
 }
 
 export async function updateTask(
   id: string,
-  updates: { title?: string; due_date?: string | null; area?: AreaId }
+  updates: {
+    title?: string;
+    due_date?: string | null;
+    area?: AreaId;
+    completed?: boolean;
+    noteId?: string | null;
+  }
 ): Promise<Task> {
   const payload = {
     ...updates,
@@ -165,12 +224,52 @@ export async function updateTask(
         }
       : {}),
   };
-  return requireTask(
-    await apiRequest<unknown>("/api/data/tasks", {
-      method: "PATCH",
-      body: jsonBody({ id, ...payload }),
-    })
+  const body = jsonBody({ id, ...payload });
+  const cachedTasks = readOfflineCache<unknown>(TASKS_CACHE_KEY) ?? [];
+  const cachedCurrent = cachedTasks.find(
+    (task): task is Task => isTask(task) && task.id === id
   );
+  if (
+    cachedCurrent &&
+    getPendingOfflineLocalIds(TASKS_CACHE_KEY).has(id)
+  ) {
+    const updated: Task = { ...cachedCurrent, ...payload };
+    enqueueOfflineMutation({
+      path: "/api/data/tasks",
+      method: "PATCH",
+      body,
+      cacheKey: TASKS_CACHE_KEY,
+      localId: id,
+    });
+    upsertOfflineCacheItem(TASKS_CACHE_KEY, updated);
+    return updated;
+  }
+
+  try {
+    const updated = requireTask(
+      await apiRequest<unknown>("/api/data/tasks", {
+        method: "PATCH",
+        body,
+      })
+    );
+    upsertOfflineCacheItem(TASKS_CACHE_KEY, updated);
+    return updated;
+  } catch (error) {
+    if (!isNetworkFailure(error)) throw error;
+    const current = cachedCurrent;
+    if (!current) throw error;
+
+    const updated: Task = { ...current, ...payload };
+    enqueueOfflineMutation({
+      path: "/api/data/tasks",
+      method: "PATCH",
+      body,
+      cacheKey: TASKS_CACHE_KEY,
+      localId: id,
+    });
+    upsertOfflineCacheItem(TASKS_CACHE_KEY, updated);
+    return updated;
+  }
 }
 
 export async function importCalendarEventAsTask(
@@ -215,11 +314,19 @@ export async function toggleTaskCompleted(
   id: string,
   completed: boolean
 ): Promise<Task> {
-  return requireTask(
-    await apiRequest<unknown>("/api/data/tasks", {
-      method: "PATCH",
-      body: jsonBody({ id, completed }),
-    })
+  return updateTask(id, { completed });
+}
+
+export function unlinkCachedTasksFromNote(noteId: string): void {
+  const cached = readOfflineCache<unknown>(TASKS_CACHE_KEY);
+  if (!cached) return;
+  writeOfflineCache(
+    TASKS_CACHE_KEY,
+    cached.map((value) =>
+      isTask(value) && value.noteId === noteId
+        ? { ...value, noteId: null }
+        : value
+    )
   );
 }
 

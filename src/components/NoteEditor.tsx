@@ -2,7 +2,14 @@
 
 /* eslint-disable @next/next/no-img-element -- Google Drive thumbnails load directly from their public URL. */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
@@ -26,9 +33,12 @@ import {
 import {
   ArrowLeft,
   Check,
+  CheckCircle2,
+  ChevronDown,
   CheckSquare,
   Download,
   ExternalLink,
+  FileText,
   Heading1,
   Heading2,
   Link2,
@@ -37,12 +47,19 @@ import {
   Maximize2,
   Paperclip,
   Play,
+  Plus,
+  Circle,
   Trash2,
 } from "lucide-react";
 import {
   findOrCreateNoteByTitle,
   getAllNotes,
 } from "@/services/notesService";
+import {
+  createTask,
+  getTasksByNote,
+  toggleTaskCompleted,
+} from "@/services/tasksService";
 import { getAreas } from "@/services/areasService";
 import {
   getDriveImagePreviewUrl,
@@ -58,6 +75,7 @@ import {
   type LightboxMedia,
 } from "@/components/MediaLightboxModal";
 import type { Area, Note } from "@/types/note";
+import type { Task } from "@/types/task";
 
 interface NoteEditorProps {
   note: Note;
@@ -65,6 +83,8 @@ interface NoteEditorProps {
   areas: Area[];
   onSave: (id: string, updates: { title?: string; content?: string }) => Promise<Note>;
   onOpenWikilink: (title: string) => void;
+  onTasksChanged: () => void;
+  tasksRefreshKey: number;
   onBackMobile: () => void;
   onRequestDelete?: (note: Note) => void;
 }
@@ -279,6 +299,8 @@ export function NoteEditor({
   areas,
   onSave,
   onOpenWikilink,
+  onTasksChanged,
+  tasksRefreshKey,
   onBackMobile,
   onRequestDelete,
 }: NoteEditorProps) {
@@ -295,10 +317,27 @@ export function NoteEditor({
     message: string;
   } | null>(null);
   const [status, setStatus] = useState<"saved" | "saving">("saved");
+  const [linkedTasks, setLinkedTasks] = useState<Task[]>([]);
+  const [linkedTasksForNote, setLinkedTasksForNote] = useState<string | null>(
+    null
+  );
+  const [linkedTasksError, setLinkedTasksError] = useState<string | null>(null);
+  const [linkedTasksLoading, setLinkedTasksLoading] = useState(true);
+  const [taskComposerOpen, setTaskComposerOpen] = useState(false);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDueDate, setTaskDueDate] = useState("");
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  const [savingLinkedTaskId, setSavingLinkedTaskId] = useState<string | null>(
+    null
+  );
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [hasTextSelection, setHasTextSelection] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestNoteId = useRef(note.id);
   const openWikilinkRef = useRef(onOpenWikilink);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const taskTitleInputRef = useRef<HTMLInputElement | null>(null);
   const uploadFilesHandlerRef = useRef<(files: File[]) => void>(() => {});
   const uploadingFilesRef = useRef(false);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
@@ -335,20 +374,25 @@ export function NoteEditor({
 
     if (!trimmedTitle) return;
 
-    const wikilink = `[[${trimmedTitle}]]`.toLocaleLowerCase();
     getAllNotes()
       .then((allNotes) => {
         if (cancelled) return;
         setBacklinksState({
           noteId: note.id,
           title: trimmedTitle,
-          notes: allNotes.filter(
-            (item) =>
-              item.id !== note.id &&
-              unescapeMarkdownBrackets(item.content)
-                .toLocaleLowerCase()
-                .includes(wikilink)
-          ),
+          notes: allNotes.filter((item) => {
+            if (item.id === note.id) return false;
+            const content = unescapeMarkdownBrackets(
+              item.content
+            ).toLocaleLowerCase();
+            return (
+              content.includes(trimmedTitle.toLocaleLowerCase()) ||
+              (item.links ?? []).some(
+                (link) => link.trim().toLocaleLowerCase() ===
+                  trimmedTitle.toLocaleLowerCase()
+              )
+            );
+          }),
         });
         setBacklinksErrorState(null);
       })
@@ -369,6 +413,32 @@ export function NoteEditor({
       cancelled = true;
     };
   }, [note.id, note.title]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getTasksByNote(note.id)
+      .then((tasks) => {
+        if (cancelled) return;
+        setLinkedTasks(tasks.filter((task) => task.noteId === note.id));
+        setLinkedTasksForNote(note.id);
+        setLinkedTasksError(null);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setLinkedTasksError(
+          error instanceof Error
+            ? error.message
+            : "No se pudieron cargar las tareas vinculadas."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setLinkedTasksLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [note.id, note.area, tasksRefreshKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -418,6 +488,11 @@ export function NoteEditor({
       ? backlinksErrorState.message
       : null;
   const areaNames = new Map(areas.map((area) => [area.slug, area.name]));
+  const noteTasks =
+    linkedTasksForNote === note.id
+      ? linkedTasks.filter((task) => task.noteId === note.id)
+      : [];
+  const connectionCount = noteTasks.length + backlinks.length + liveLinks.length;
 
   const wikilinkQuery = wikilinkPopup?.query;
   const wikilinkSuggestions = useMemo(() => {
@@ -675,6 +750,11 @@ TaskItem.configure({
     },
     onSelectionUpdate: ({ editor: currentEditor }) => {
       updateWikilinkPopupRef.current(currentEditor);
+      const { from, to, empty } = currentEditor.state.selection;
+      setHasTextSelection(
+        !empty &&
+          currentEditor.state.doc.textBetween(from, to, " ").trim().length > 0
+      );
     },
   });
   useEffect(() => {
@@ -778,6 +858,99 @@ TaskItem.configure({
     }, 800);
   }
 
+  useEffect(() => {
+    if (taskComposerOpen) taskTitleInputRef.current?.focus();
+  }, [taskComposerOpen]);
+
+  function openTaskComposer() {
+    setConnectionsOpen(true);
+    setTaskComposerOpen(true);
+    setTaskError(null);
+  }
+
+  async function handleCreateLinkedTask(event: FormEvent) {
+    event.preventDefault();
+    if (!taskTitle.trim() || creatingTask) return;
+
+    setCreatingTask(true);
+    setTaskError(null);
+    try {
+      const created = await createTask(
+        note.area,
+        taskTitle,
+        taskDueDate || null,
+        [],
+        note.id
+      );
+      setLinkedTasks((current) => [created, ...current.filter((task) => task.id !== created.id)]);
+      setTaskTitle("");
+      setTaskDueDate("");
+      setTaskComposerOpen(false);
+      onTasksChanged();
+    } catch (error: unknown) {
+      setTaskError(
+        error instanceof Error ? error.message : "No se pudo crear la tarea."
+      );
+    } finally {
+      setCreatingTask(false);
+    }
+  }
+
+  async function handleToggleLinkedTask(task: Task) {
+    if (savingLinkedTaskId) return;
+    setSavingLinkedTaskId(task.id);
+    setTaskError(null);
+    try {
+      const updated = await toggleTaskCompleted(task.id, !task.completed);
+      setLinkedTasks((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item))
+      );
+      onTasksChanged();
+    } catch (error: unknown) {
+      setTaskError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo actualizar la tarea."
+      );
+    } finally {
+      setSavingLinkedTaskId(null);
+    }
+  }
+
+  async function handleConvertSelectionToTask() {
+    if (!editor) return;
+    const selection = editor.state.selection;
+    const selectedText = editor.state.doc
+      .textBetween(selection.from, selection.to, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!selectedText) return;
+
+    setTaskError(null);
+    try {
+      const created = await createTask(note.area, selectedText, null, [], note.id);
+      setLinkedTasks((current) => [created, ...current.filter((task) => task.id !== created.id)]);
+      if (
+        !editor.isDestroyed &&
+        editor.state.selection.from === selection.from &&
+        editor.state.selection.to === selection.to &&
+        editor.state.doc
+          .textBetween(selection.from, selection.to, " ")
+          .replace(/\s+/g, " ")
+          .trim() === selectedText
+      ) {
+        if (!editor.isActive("taskItem") && editor.can().toggleTaskList()) {
+          editor.chain().focus().toggleTaskList().run();
+        }
+      }
+      onTasksChanged();
+    } catch (error: unknown) {
+      setTaskError(
+        error instanceof Error ? error.message : "No se pudo crear la tarea."
+      );
+    }
+  }
+
   function handleTitleChange(newTitle: string) {
     setTitle(newTitle);
     scheduleSave({ title: newTitle.trim() || "Sin título" });
@@ -877,6 +1050,28 @@ TaskItem.configure({
               >
                 <CheckSquare className="size-3.5" />
               </button>
+              <button
+                type="button"
+                title="Agregar tarea vinculada a esta nota"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={openTaskComposer}
+                className="flex items-center gap-1 rounded-md border border-zinc-800 px-2 py-1.5 text-xs text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+              >
+                <Plus className="size-3.5" />
+                Tarea
+              </button>
+              {hasTextSelection ? (
+                <button
+                  type="button"
+                  title="Convertir selección en tarea vinculada"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => void handleConvertSelectionToTask()}
+                  className="flex items-center gap-1 rounded-md border border-emerald-900/70 px-2 py-1.5 text-xs text-emerald-300 hover:bg-emerald-950/50"
+                >
+                  <CheckSquare className="size-3.5" />
+                  Convertir en tarea
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1056,61 +1251,208 @@ TaskItem.configure({
             </div>
           ) : null}
         </div>
+
+        <section className="mt-10 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
+          <button
+            type="button"
+            aria-expanded={connectionsOpen}
+            onClick={() => setConnectionsOpen((open) => !open)}
+            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-zinc-900/70 md:px-5"
+          >
+            <span className="flex min-w-0 items-center gap-2.5">
+              <Link2 className="size-4 shrink-0 text-zinc-400" />
+              <span className="truncate text-sm font-medium text-zinc-200">
+                Conexiones y Tareas
+              </span>
+            </span>
+            <span className="flex shrink-0 items-center gap-2">
+              <span className="rounded-full border border-zinc-700 bg-zinc-950 px-2 py-0.5 text-[11px] text-zinc-400">
+                {connectionCount}
+              </span>
+              <ChevronDown
+                className={`size-4 text-zinc-500 transition ${
+                  connectionsOpen ? "rotate-180" : ""
+                }`}
+              />
+            </span>
+          </button>
+
+          {connectionsOpen ? (
+            <div className="space-y-5 border-t border-zinc-800 px-4 py-4 md:px-5">
+              <section>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h3 className="text-xs font-medium text-zinc-300">
+                    Tareas vinculadas ({noteTasks.length})
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTaskComposerOpen((open) => !open);
+                      setTaskError(null);
+                    }}
+                    className="flex items-center gap-1 rounded-md border border-zinc-800 px-2 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-900"
+                  >
+                    <Plus className="size-3" />
+                    Agregar tarea
+                  </button>
+                </div>
+
+                {taskComposerOpen ? (
+                  <form
+                    onSubmit={(event) => void handleCreateLinkedTask(event)}
+                    className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/70 p-2"
+                  >
+                    <input
+                      ref={taskTitleInputRef}
+                      type="text"
+                      aria-label="Título de la tarea vinculada"
+                      value={taskTitle}
+                      onChange={(event) => setTaskTitle(event.target.value)}
+                      placeholder="¿Qué hay que hacer?"
+                      className="h-9 min-w-36 flex-1 rounded-md border border-zinc-800 bg-zinc-950 px-3 text-xs text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600"
+                    />
+                    <input
+                      type="datetime-local"
+                      aria-label="Fecha opcional de la tarea"
+                      value={taskDueDate}
+                      onChange={(event) => setTaskDueDate(event.target.value)}
+                      className="h-9 rounded-md border border-zinc-800 bg-zinc-950 px-2 text-xs text-zinc-300 outline-none focus:border-zinc-600 [color-scheme:dark]"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!taskTitle.trim() || creatingTask}
+                      className="h-9 rounded-md bg-zinc-100 px-3 text-xs font-medium text-zinc-950 transition hover:bg-white disabled:opacity-50"
+                    >
+                      {creatingTask ? "Creando…" : "Crear tarea"}
+                    </button>
+                  </form>
+                ) : null}
+
+                {linkedTasksLoading && linkedTasksForNote !== note.id ? (
+                  <p className="py-2 text-xs text-zinc-500">
+                    Cargando tareas…
+                  </p>
+                ) : noteTasks.length > 0 ? (
+                  <ul className="space-y-1.5">
+                    {noteTasks.map((task) => (
+                      <li key={task.id}>
+                        <button
+                          type="button"
+                          disabled={savingLinkedTaskId === task.id}
+                          onClick={() => void handleToggleLinkedTask(task)}
+                          className="flex w-full items-center gap-2.5 rounded-lg border border-zinc-800/80 bg-zinc-950/50 px-3 py-2 text-left transition hover:border-zinc-700 hover:bg-zinc-950 disabled:opacity-60"
+                        >
+                          {task.completed ? (
+                            <CheckCircle2 className="size-4 shrink-0 text-emerald-400" />
+                          ) : (
+                            <Circle className="size-4 shrink-0 text-zinc-500" />
+                          )}
+                          <span
+                            className={`min-w-0 flex-1 truncate text-xs ${
+                              task.completed
+                                ? "text-zinc-500 line-through"
+                                : "text-zinc-200"
+                            }`}
+                          >
+                            {task.title}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="py-2 text-xs text-zinc-500">
+                    Todavía no hay tareas vinculadas a esta nota.
+                  </p>
+                )}
+              </section>
+
+              {taskError || linkedTasksError ? (
+                <p role="alert" className="text-xs text-red-300">
+                  {taskError ?? linkedTasksError}
+                </p>
+              ) : null}
+
+              <section>
+                <h3 className="mb-2 text-xs font-medium text-zinc-300">
+                  Menciones inversas ({backlinks.length})
+                </h3>
+                {backlinksError ? (
+                  <p role="alert" className="text-xs text-red-300">
+                    {backlinksError}
+                  </p>
+                ) : backlinks.length > 0 ? (
+                  <ul className="space-y-1.5">
+                    {backlinks.map((backlink) => {
+                      const backlinkArea = areas.find(
+                        (area) => area.slug === backlink.area
+                      );
+                      return (
+                        <li key={backlink.id}>
+                          <button
+                            type="button"
+                            onClick={() => onOpenWikilink(backlink.title)}
+                            className="flex w-full flex-col items-start rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-left transition hover:border-zinc-700 hover:bg-zinc-950"
+                          >
+                            <span className="flex max-w-full items-center gap-2">
+                              <FileText className="size-3.5 shrink-0 text-zinc-500" />
+                              <span className="truncate text-xs text-zinc-200">
+                                {backlink.title || "Sin título"}
+                              </span>
+                              <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-800 px-2 py-0.5 text-[10px] text-zinc-400">
+                                <span
+                                  aria-hidden="true"
+                                  className="size-1.5 rounded-full"
+                                  style={{
+                                    backgroundColor:
+                                      backlinkArea?.color ?? "#71717a",
+                                  }}
+                                />
+                                {areaNames.get(backlink.area) ?? backlink.area}
+                              </span>
+                            </span>
+                            <span className="mt-1 pl-5 text-[11px] leading-4 text-zinc-500">
+                              {getWikilinkSnippet(backlink.content, note.title)}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : backlinksState?.noteId === note.id ? (
+                  <p className="py-2 text-xs text-zinc-500">
+                    Ninguna otra nota menciona este título.
+                  </p>
+                ) : (
+                  <p className="py-2 text-xs text-zinc-500">
+                    Cargando menciones…
+                  </p>
+                )}
+              </section>
+
+              {liveLinks.length > 0 ? (
+                <section>
+                  <h3 className="mb-2 text-xs font-medium text-zinc-300">
+                    Notas enlazadas ({liveLinks.length})
+                  </h3>
+                  <div className="flex flex-wrap gap-1.5">
+                    {liveLinks.map((linkTitle) => (
+                      <button
+                        key={linkTitle}
+                        type="button"
+                        onClick={() => onOpenWikilink(linkTitle)}
+                        className="rounded-md border border-zinc-800 bg-zinc-950 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-900"
+                      >
+                        [[{linkTitle}]]
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
       </div>
-
-      {backlinks.length > 0 ? (
-        <div className="border-t border-zinc-800/80 bg-zinc-900/40 px-5 py-3 md:px-10">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="mr-1 text-xs font-medium text-zinc-400">
-              Mencionada en ({backlinks.length})
-            </span>
-            {backlinks.map((backlink) => (
-              <button
-                key={backlink.id}
-                type="button"
-                onClick={() => onOpenWikilink(backlink.title)}
-                className="flex max-w-80 flex-col items-start rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-left text-xs text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
-              >
-                <span className="flex items-center gap-2">
-                  <span>{backlink.title || "Sin título"}</span>
-                  <span className="capitalize text-zinc-500">
-                    {areaNames.get(backlink.area) ?? backlink.area}
-                  </span>
-                </span>
-                <span className="mt-1 text-[11px] leading-4 text-zinc-500">
-                  {getWikilinkSnippet(backlink.content, note.title)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {backlinksError ? (
-        <p role="alert" className="border-t border-zinc-800/80 px-5 py-2 text-xs text-red-300 md:px-10">
-          {backlinksError}
-        </p>
-      ) : null}
-
-      {liveLinks.length > 0 ? (
-        <div className="border-t border-zinc-800/80 bg-zinc-900/40 px-5 py-3 md:px-10">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="flex items-center gap-1 text-xs text-zinc-500">
-              <Link2 className="size-3.5" />
-              Conexiones:
-            </span>
-            {liveLinks.map((linkTitle) => (
-              <button
-                key={linkTitle}
-                type="button"
-                onClick={() => onOpenWikilink(linkTitle)}
-                className="rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
-              >
-                [[{linkTitle}]]
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

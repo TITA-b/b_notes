@@ -6,6 +6,8 @@ import {
 } from "@/services/offlineCache";
 
 const PENDING_MUTATIONS_KEY = "bnotes_pending_mutations";
+const TASKS_CACHE_KEY = "bnotes_cache_tasks";
+const NOTES_CACHE_KEY = "bnotes_cache_notes";
 
 export type OfflineSyncStatus = "idle" | "pending" | "syncing" | "error";
 type MutationMethod = "POST" | "PATCH";
@@ -153,8 +155,15 @@ function remapQueuedIds(
     let body = mutation.body;
     try {
       const parsed: unknown = JSON.parse(body);
-      if (isRecord(parsed) && parsed.id === previousId) {
-        body = JSON.stringify({ ...parsed, id: nextId });
+      if (isRecord(parsed)) {
+        const remapped = {
+          ...parsed,
+          ...(parsed.id === previousId ? { id: nextId } : {}),
+          ...(parsed.noteId === previousId ? { noteId: nextId } : {}),
+        };
+        if (remapped.id !== parsed.id || remapped.noteId !== parsed.noteId) {
+          body = JSON.stringify(remapped);
+        }
       }
     } catch (error) {
       console.error("Could not remap an offline mutation identifier.", error);
@@ -165,6 +174,19 @@ function remapQueuedIds(
       localId: mutation.localId === previousId ? nextId : mutation.localId,
     };
   });
+}
+
+function remapCachedTaskNoteIds(previousId: string, nextId: string): void {
+  const tasks = readOfflineCache<Record<string, unknown>>(TASKS_CACHE_KEY);
+  if (!tasks) return;
+  writeOfflineCache(
+    TASKS_CACHE_KEY,
+    tasks.map((task) =>
+      isRecord(task) && task.noteId === previousId
+        ? { ...task, noteId: nextId }
+        : task
+    )
+  );
 }
 
 let activeSync: Promise<void> | null = null;
@@ -207,6 +229,9 @@ async function flushPendingMutations(): Promise<void> {
       mutations = mutations.slice(1);
       if (mutation.localId && serverId && mutation.localId !== serverId) {
         mutations = remapQueuedIds(mutations, mutation.localId, serverId);
+        if (mutation.cacheKey === NOTES_CACHE_KEY) {
+          remapCachedTaskNoteIds(mutation.localId, serverId);
+        }
       }
       savePendingMutations(mutations);
       dispatchSyncStatus(

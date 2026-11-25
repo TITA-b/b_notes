@@ -1,5 +1,6 @@
 import type { AreaId, Note } from "@/types/note";
 import { apiRequest, jsonBody } from "@/services/apiClient";
+import { unlinkCachedTasksFromNote } from "@/services/tasksService";
 import {
   clearOfflineCacheStorage,
   isNetworkFailure,
@@ -159,6 +160,7 @@ export async function deleteNote(id: string): Promise<void> {
   await apiRequest<void>(`/api/data/notes?id=${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+  unlinkCachedTasksFromNote(id);
 }
 
 export async function findOrCreateNoteByTitle(

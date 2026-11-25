@@ -7,11 +7,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeTask(task: Task): Task {
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
+type TaskRow = Omit<Task, "noteId"> & { note_id: string | null };
+
+function normalizeTask(task: TaskRow): Task {
+  const { note_id, ...fields } = task;
   return {
-    ...task,
-    attachments: Array.isArray(task.attachments) ? task.attachments : [],
+    ...fields,
+    noteId: note_id,
+    attachments: Array.isArray(fields.attachments) ? fields.attachments : [],
   };
+}
+
+async function noteBelongsToUser(
+  noteId: string,
+  userId: string
+): Promise<boolean> {
+  const { rows } = await query<{ exists: boolean }>(
+    "SELECT EXISTS (SELECT 1 FROM notes WHERE id = $1 AND user_id = $2) AS exists",
+    [noteId, userId]
+  );
+  return rows[0]?.exists === true;
 }
 
 export async function GET(request: Request) {
@@ -21,6 +42,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const area = url.searchParams.get("area");
   const eventId = url.searchParams.get("gcal_event_id");
+  const noteId = url.searchParams.get("note_id");
   const values: unknown[] = [auth.user.id];
   const filters = ["user_id = $1"];
   if (area) {
@@ -31,8 +53,12 @@ export async function GET(request: Request) {
     values.push(eventId);
     filters.push(`gcal_event_id = $${values.length}`);
   }
+  if (noteId) {
+    values.push(noteId);
+    filters.push(`note_id = $${values.length}`);
+  }
   try {
-    const { rows } = await query<Task>(
+    const { rows } = await query<TaskRow>(
       `SELECT * FROM tasks WHERE ${filters.join(" AND ")} ORDER BY completed ASC, due_date ASC NULLS LAST, created_at DESC`,
       values
     );
@@ -69,12 +95,23 @@ export async function POST(request: Request) {
   if (body.attachments !== undefined && !Array.isArray(body.attachments)) {
     return invalidRequest("Los adjuntos no son válidos.");
   }
+  if (
+    body.noteId !== undefined &&
+    body.noteId !== null &&
+    (typeof body.noteId !== "string" || !isUuid(body.noteId))
+  ) {
+    return invalidRequest("La nota asociada no es válida.");
+  }
 
   try {
-    const { rows } = await query<Task>(
+    const noteId = typeof body.noteId === "string" ? body.noteId : null;
+    if (noteId && !(await noteBelongsToUser(noteId, auth.user.id))) {
+      return invalidRequest("La nota asociada no existe.");
+    }
+    const { rows } = await query<TaskRow>(
       `INSERT INTO tasks
-        (user_id, area, title, due_date, completed, sync_to_gcal, gcal_event_id, attachments)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        (user_id, area, title, due_date, completed, sync_to_gcal, gcal_event_id, attachments, note_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         auth.user.id,
@@ -85,6 +122,7 @@ export async function POST(request: Request) {
         body.sync_to_gcal === true,
         typeof body.gcal_event_id === "string" ? body.gcal_event_id : null,
         JSON.stringify(body.attachments ?? []),
+        noteId,
       ]
     );
     if (!rows[0]) {
@@ -143,16 +181,31 @@ export async function PATCH(request: Request) {
     if (!Array.isArray(body.attachments)) return invalidRequest("Los adjuntos no son válidos.");
     updates.push(["attachments", JSON.stringify(body.attachments)]);
   }
+  if (body.noteId !== undefined) {
+    if (
+      body.noteId !== null &&
+      (typeof body.noteId !== "string" || !isUuid(body.noteId))
+    ) {
+      return invalidRequest("La nota asociada no es válida.");
+    }
+    updates.push(["note_id", body.noteId]);
+  }
   if (updates.length === 0) return invalidRequest("No hay cambios para guardar.");
 
-  const values: unknown[] = [auth.user.id, body.id];
-  const assignments = updates.map(([key, value]) => {
-    values.push(value);
-    const placeholder = `$${values.length}`;
-    return `${key} = ${key === "attachments" ? `${placeholder}::jsonb` : placeholder}`;
-  });
   try {
-    const { rows } = await query<Task>(
+    if (
+      typeof body.noteId === "string" &&
+      !(await noteBelongsToUser(body.noteId, auth.user.id))
+    ) {
+      return invalidRequest("La nota asociada no existe.");
+    }
+    const values: unknown[] = [auth.user.id, body.id];
+    const assignments = updates.map(([key, value]) => {
+      values.push(value);
+      const placeholder = `$${values.length}`;
+      return `${key} = ${key === "attachments" ? `${placeholder}::jsonb` : placeholder}`;
+    });
+    const { rows } = await query<TaskRow>(
       `UPDATE tasks SET ${assignments.join(", ")} WHERE user_id = $1 AND id = $2 RETURNING *`,
       values
     );

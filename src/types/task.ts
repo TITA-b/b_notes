@@ -16,6 +16,7 @@ export interface Task {
   completed: boolean;
   sync_to_gcal: boolean;
   gcal_event_id: string | null;
+  noteId?: string | null;
   created_at: string;
   attachments?: TaskAttachment[];
 }
