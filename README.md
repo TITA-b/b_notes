@@ -42,27 +42,31 @@ graph LR
 
 Las imágenes muestran B_Notes en tema oscuro y usan exclusivamente contenido sintético de demostración.
 
-<table>
+<table width="100%">
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <strong>Editor de notas · Escritorio</strong><br>
       <img src="docs/screenshots/notas-editor.png" alt="Editor de notas con formato y menú de plantillas" width="100%" />
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <strong>Tareas y Agenda · Escritorio</strong><br>
       <img src="docs/screenshots/agenda-general.png" alt="Tareas en vista General junto al panel de Google Calendar" width="100%" />
-    </td>
-    <td align="center" width="33%">
-      <strong>Grafo de conocimiento · Escritorio</strong><br>
-      <img src="docs/screenshots/grafo.png" alt="Grafo de conocimiento con notas y conexiones" width="100%" />
     </td>
   </tr>
 </table>
 
-<p align="center">
-  <strong>Captura rápida · PWA móvil</strong><br>
-  <img src="docs/screenshots/mobile-pwa.png" width="280" alt="Captura rápida · PWA móvil" />
-</p>
+<table width="100%">
+  <tr>
+    <td width="65%" valign="middle">
+      <strong>Grafo de conocimiento · Escritorio</strong><br>
+      <img src="docs/screenshots/grafo.png" alt="Grafo de conocimiento con notas y conexiones" width="65%" />
+    </td>
+    <td width="35%" align="center" valign="middle">
+      <strong>Captura rápida · PWA móvil</strong><br>
+      <img src="docs/screenshots/mobile-pwa.png" width="210" alt="Captura rápida · PWA móvil" />
+    </td>
+  </tr>
+</table>
 
 ## Inicio rápido
 
