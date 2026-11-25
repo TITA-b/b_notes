@@ -95,24 +95,50 @@ La integración es opcional. En [Google Cloud Console](https://console.cloud.goo
 
 B_Notes solicita los scopes `https://www.googleapis.com/auth/calendar.events` y `https://www.googleapis.com/auth/drive.file`. El segundo limita el acceso de Drive a archivos creados o abiertos por la aplicación.
 
-## Notificaciones Push y procesamiento de adjuntos
+## Configuración de Notificaciones Web Push (VAPID)
 
-Las notificaciones requieren HTTPS en los dispositivos (localhost también es seguro para desarrollo). Generá un par VAPID una sola vez con `node -e "console.log(require('web-push').generateVAPIDKeys())"`, guardalo fuera del repositorio y completá en `.env`:
+Las notificaciones requieren HTTPS en los dispositivos (localhost también es seguro para desarrollo).
 
-- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`: clave pública.
-- `VAPID_PRIVATE_KEY`: clave privada; no la compartas ni la agregues a Git.
-- `VAPID_SUBJECT`: un contacto `mailto:` o una URL HTTPS.
-- `INTERNAL_PUSH_SECRET`: valor aleatorio largo para autenticar workflows internos de n8n.
+1. Desde la raíz del proyecto, generá el par de claves VAPID. Guardá la salida de forma segura; no la compartas ni la agregues al repositorio.
 
-Recreá B_Notes después de guardar esas variables:
+   ```sh
+   npx web-push generate-vapid-keys
+   ```
 
-```sh
-docker compose up -d --force-recreate b-notes
-```
+2. Completá estas variables en el archivo `.env`, reemplazando los marcadores por tus propios valores:
 
-En n8n, un nodo **HTTP Request** puede enviar notificaciones con `POST` a `http://b-notes:3000/api/push/send`. Configurá el header `x-internal-secret` con el mismo `INTERNAL_PUSH_SECRET` y enviá JSON como `{"title":"B_Notes","body":"Tenés tareas pendientes","url":"/"}`. La URL debe ser una ruta dentro de la aplicación; el endpoint descarta suscripciones expiradas. Guardá el secreto en credenciales de n8n, no en texto visible del workflow.
+   ```dotenv
+   NEXT_PUBLIC_VAPID_PUBLIC_KEY=<CLAVE_PUBLICA_GENERADA>
+   VAPID_PRIVATE_KEY=<CLAVE_PRIVADA_GENERADA>
+   VAPID_SUBJECT=mailto:tu-correo@dominio.com
+   INTERNAL_PUSH_SECRET=<TOKEN_ALEATORIO_LARGO>
+   ```
 
-El botón **Notificaciones Push** de la barra lateral registra o elimina la suscripción del navegador y permite mandar una prueba. Para recibir notificaciones en iOS/iPadOS, instalá primero la PWA desde Safari; en Android, instalala desde Chrome. El procesamiento de audio usa el workflow n8n existente (Groq Whisper); los PDF se extraen en el servidor y, si n8n está configurado, también se resumen con IA. Los PDF escaneados sin texto seleccionable no tienen OCR.
+   `VAPID_PRIVATE_KEY` e `INTERNAL_PUSH_SECRET` son secretos: no los publiques ni los guardes en el workflow de n8n como texto visible. El asunto VAPID puede ser una dirección `mailto:` o una URL HTTPS. El cliente obtiene la clave pública desde `/api/push/config` en tiempo de ejecución; el contenedor recibe las variables desde Compose.
+
+3. Reconstruí y recreá B_Notes para aplicar la configuración del `.env` al servicio:
+
+   ```sh
+   docker compose up -d --build b-notes
+   ```
+
+4. En Android, accedé a B_Notes mediante la URL HTTPS de Tailscale, instalá la PWA desde Chrome y activá **Notificaciones Push** desde la barra lateral. La misma sección permite enviar una notificación de prueba. En iOS/iPadOS, instalá primero la PWA desde Safari con **Compartir → Agregar a pantalla de inicio**.
+
+5. Para enviar notificaciones desde n8n, agregá un nodo **HTTP Request** con método `POST` y URL `http://b-notes:3000/api/push/send`. Configurá el header `x-internal-secret` con el valor de `INTERNAL_PUSH_SECRET` almacenado en las credenciales de n8n y enviá un cuerpo JSON como el siguiente:
+
+   ```json
+   {
+     "title": "B_Notes",
+     "body": "Tenés tareas pendientes",
+     "url": "/"
+   }
+   ```
+
+   `url` debe ser una ruta dentro de la aplicación. El endpoint elimina automáticamente las suscripciones expiradas.
+
+## Procesamiento IA de audio y PDF
+
+Desde el editor de notas o la captura rápida, adjuntá un audio o PDF y elegí **Transcribir / Resumir con IA**. Los audios se procesan con Groq Whisper a través del workflow de n8n; los PDF se extraen en el servidor y, si n8n está configurado, también se resumen con IA. Los PDF escaneados sin texto seleccionable no tienen OCR. Para compartir archivos desde Android, usá **Compartir** y seleccioná B_Notes; la captura rápida permite procesarlos y guardar el resultado en una nota.
 
 ## Acceso móvil privado — Tailscale HTTPS
 
