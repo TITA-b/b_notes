@@ -5,6 +5,8 @@ const PUBLIC_PATHS = [
   "/login",
   "/api/auth/",
   "/api/health",
+  "/api/push/send",
+  "/share",
   "/manifest.webmanifest",
   "/sw.js",
 ];

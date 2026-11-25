@@ -9,12 +9,19 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     scope: "/",
     share_target: {
-      action: "/",
-      method: "GET",
+      action: "/share",
+      method: "POST",
+      enctype: "multipart/form-data",
       params: {
         title: "share_title",
         text: "share_text",
         url: "share_url",
+        files: [
+          {
+            name: "share_file",
+            accept: ["audio/*", "application/pdf"],
+          },
+        ],
       },
     },
     display: "standalone",

@@ -95,6 +95,25 @@ La integración es opcional. En [Google Cloud Console](https://console.cloud.goo
 
 B_Notes solicita los scopes `https://www.googleapis.com/auth/calendar.events` y `https://www.googleapis.com/auth/drive.file`. El segundo limita el acceso de Drive a archivos creados o abiertos por la aplicación.
 
+## Notificaciones Push y procesamiento de adjuntos
+
+Las notificaciones requieren HTTPS en los dispositivos (localhost también es seguro para desarrollo). Generá un par VAPID una sola vez con `node -e "console.log(require('web-push').generateVAPIDKeys())"`, guardalo fuera del repositorio y completá en `.env`:
+
+- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`: clave pública.
+- `VAPID_PRIVATE_KEY`: clave privada; no la compartas ni la agregues a Git.
+- `VAPID_SUBJECT`: un contacto `mailto:` o una URL HTTPS.
+- `INTERNAL_PUSH_SECRET`: valor aleatorio largo para autenticar workflows internos de n8n.
+
+Recreá B_Notes después de guardar esas variables:
+
+```sh
+docker compose up -d --force-recreate b-notes
+```
+
+En n8n, un nodo **HTTP Request** puede enviar notificaciones con `POST` a `http://b-notes:3000/api/push/send`. Configurá el header `x-internal-secret` con el mismo `INTERNAL_PUSH_SECRET` y enviá JSON como `{"title":"B_Notes","body":"Tenés tareas pendientes","url":"/"}`. La URL debe ser una ruta dentro de la aplicación; el endpoint descarta suscripciones expiradas. Guardá el secreto en credenciales de n8n, no en texto visible del workflow.
+
+El botón **Notificaciones Push** de la barra lateral registra o elimina la suscripción del navegador y permite mandar una prueba. Para recibir notificaciones en iOS/iPadOS, instalá primero la PWA desde Safari; en Android, instalala desde Chrome. El procesamiento de audio usa el workflow n8n existente (Groq Whisper); los PDF se extraen en el servidor y, si n8n está configurado, también se resumen con IA. Los PDF escaneados sin texto seleccionable no tienen OCR.
+
 ## Acceso móvil privado — Tailscale HTTPS
 
 1. Instalá Tailscale en el servidor y en el teléfono/tablet, e iniciá sesión en el mismo tailnet.
@@ -109,7 +128,7 @@ B_Notes solicita los scopes `https://www.googleapis.com/auth/calendar.events` y 
 
 ### Android — Chrome
 
-Abrí la URL HTTPS en Chrome, iniciá sesión y elegí **Instalar aplicación** en el menú del navegador (o **Agregar a pantalla principal**, según la versión). Aceptá la instalación de la PWA.
+Abrí la URL HTTPS en Chrome, iniciá sesión y elegí **Instalar aplicación** en el menú del navegador (o **Agregar a pantalla principal**, según la versión). Aceptá la instalación de la PWA. Para compartir audio o PDF desde Android, usá **Compartir** y seleccioná B_Notes; la captura rápida permite procesar el archivo y guardar el resultado en una nota.
 
 ### iOS / iPadOS — Safari
 

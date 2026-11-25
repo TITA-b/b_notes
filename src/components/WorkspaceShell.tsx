@@ -25,6 +25,7 @@ import { QuickCaptureModal } from "@/components/QuickCaptureModal";
 import { TemplateManagerModal } from "@/components/TemplateManagerModal";
 import { getAreas } from "@/services/areasService";
 import { getNoteTemplatesForArea } from "@/lib/noteTemplates";
+import { takeSharedAttachment } from "@/services/shareTarget";
 import {
   createOrOpenPeriodicNote,
   type PeriodicNoteKind,
@@ -83,6 +84,11 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [aiOpen, setAiOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
+  const [sharedAttachment, setSharedAttachment] = useState<File | null>(null);
+  const [shareCapturePrefill, setShareCapturePrefill] = useState<{
+    title: string;
+    content: string;
+  } | null>(null);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [closeLightboxSignal, setCloseLightboxSignal] = useState(0);
   const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
@@ -704,18 +710,64 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     const shareTitle = params.get("share_title");
     const shareText = params.get("share_text");
     const shareUrl = params.get("share_url");
-    if (shareTitle === null && shareText === null && shareUrl === null) return;
+    const attachmentId = params.get("share_attachment_id");
+    const shareError = params.get("share_error");
+    if (
+      shareTitle === null &&
+      shareText === null &&
+      shareUrl === null &&
+      attachmentId === null &&
+      shareError === null
+    ) {
+      return;
+    }
 
     shareTargetHandledRef.current = true;
-    const title = shareTitle?.trim() || "Captura compartida";
     const content = [shareText?.trim(), shareUrl?.trim()]
       .filter((value): value is string => Boolean(value))
       .join("\n\n");
 
+    window.history.replaceState({}, "", "/");
+    if (shareError) {
+      window.setTimeout(() => {
+        setShareCaptureError(
+          "No se pudo recibir el archivo compartido. Actualizá B_Notes e intentá nuevamente."
+        );
+      }, 0);
+      return;
+    }
+
+    if (attachmentId) {
+      void takeSharedAttachment(attachmentId)
+        .then((file) => {
+          if (!file) {
+            throw new Error("No se encontró el archivo compartido.");
+          }
+          const fallbackTitle =
+            file.name.replace(/\.[^.]+$/, "").trim() || "Captura compartida";
+          setShareCapturePrefill({
+            title: shareTitle?.trim() || fallbackTitle,
+            content,
+          });
+          setSharedAttachment(file);
+          if (!quickCaptureOpen) pushHistoryLayer("quick-capture");
+          setQuickCaptureOpen(true);
+          setShareCaptureError(null);
+        })
+        .catch((error: unknown) => {
+          setShareCaptureError(
+            error instanceof Error
+              ? `No se pudo abrir el archivo compartido: ${error.message}`
+              : "No se pudo abrir el archivo compartido."
+          );
+        });
+      return;
+    }
+
+    const title = shareTitle?.trim() || "Captura compartida";
     createNote(noteCreationArea, title, content)
       .then((created) => {
         handleSelectNote(created);
-        window.history.replaceState({}, "", "/");
       })
       .catch((error: unknown) => {
         setShareCaptureError(
@@ -724,7 +776,14 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
             : "No se pudo guardar la captura compartida."
         );
       });
-  }, [activeArea, areas.length, handleSelectNote, noteCreationArea]);
+  }, [
+    activeArea,
+    areas.length,
+    handleSelectNote,
+    noteCreationArea,
+    pushHistoryLayer,
+    quickCaptureOpen,
+  ]);
 
   async function handleCreateNote(template?: NoteTemplate) {
     const created = await createNote(
@@ -1217,11 +1276,17 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
 
       {quickCaptureOpen ? (
         <QuickCaptureModal
+          key={sharedAttachment ? `${sharedAttachment.name}:${sharedAttachment.size}` : "empty"}
           areas={areas}
           activeArea={activeArea}
+          initialTitle={shareCapturePrefill?.title}
+          initialContent={shareCapturePrefill?.content}
+          initialAttachment={sharedAttachment}
           onClose={() => {
             closeHistoryLayer("quick-capture");
             setQuickCaptureOpen(false);
+            setSharedAttachment(null);
+            setShareCapturePrefill(null);
           }}
           onNoteCreated={handleSelectNote}
           onTaskCreated={() => {

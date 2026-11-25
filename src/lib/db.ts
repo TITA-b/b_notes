@@ -94,6 +94,14 @@ export async function ensureDatabaseSchema(): Promise<void> {
           expiry_date bigint,
           updated_at timestamptz NOT NULL DEFAULT now()
         );
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id SERIAL PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          endpoint TEXT UNIQUE NOT NULL,
+          p256dh TEXT NOT NULL,
+          auth TEXT NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        );
         CREATE INDEX IF NOT EXISTS areas_user_position_idx
           ON areas(user_id, position);
         CREATE INDEX IF NOT EXISTS notes_user_area_updated_idx

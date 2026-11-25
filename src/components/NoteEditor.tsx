@@ -51,6 +51,7 @@ import {
   Circle,
   RefreshCw,
   RotateCcw,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import {
@@ -118,6 +119,15 @@ interface WikilinkAutocompleteState {
   activeIndex: number;
 }
 
+interface PendingAiAttachment {
+  id: string;
+  noteId: string;
+  file: File;
+  position: number;
+  processing: boolean;
+  error: string | null;
+}
+
 const EMPTY_NOTES: Note[] = [];
 
 function parseLinksLive(text: string): string[] {
@@ -142,6 +152,19 @@ function unescapeMarkdownBrackets(text: string): string {
 
 function escapeMarkdownLabel(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+}
+
+function getAiAttachmentType(file: File): "audio" | "pdf" | null {
+  if (
+    file.type.startsWith("audio/") ||
+    /\.(aac|flac|m4a|mp3|oga|ogg|opus|wav|webm)$/i.test(file.name)
+  ) {
+    return "audio";
+  }
+  if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+    return "pdf";
+  }
+  return null;
 }
 
 function findWikilinkAtPosition(view: EditorView, position: number): string | null {
@@ -354,6 +377,10 @@ export function NoteEditor({
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [driveNeedsReconnect, setDriveNeedsReconnect] = useState(false);
+  const [pendingAiAttachments, setPendingAiAttachments] = useState<
+    PendingAiAttachment[]
+  >([]);
+  const pendingAiAttachmentsRef = useRef<PendingAiAttachment[]>([]);
   const [wikilinkDataState, setWikilinkDataState] = useState<{
     noteId: string;
     notes: Note[];
@@ -764,6 +791,19 @@ TaskItem.configure({
       setLiveLinks(parseLinksLive(markdown));
       scheduleSave({ content: markdown });
     },
+    onTransaction: ({ transaction }) => {
+      if (!transaction.docChanged || pendingAiAttachmentsRef.current.length === 0) {
+        return;
+      }
+      const mappedAttachments = pendingAiAttachmentsRef.current.map(
+        (attachment) => ({
+          ...attachment,
+          position: transaction.mapping.map(attachment.position, 1),
+        })
+      );
+      pendingAiAttachmentsRef.current = mappedAttachments;
+      setPendingAiAttachments(mappedAttachments);
+    },
     onSelectionUpdate: ({ editor: currentEditor }) => {
       updateWikilinkPopupRef.current(currentEditor);
       const { from, to, empty } = currentEditor.state.selection;
@@ -813,11 +853,26 @@ TaskItem.configure({
           : data.file.mimeType.startsWith("image/")
             ? `![${escapeMarkdownLabel(file.name)}](${data.file.thumbnailUrl ?? data.file.webViewLink})`
             : `[📎 ${escapeMarkdownLabel(file.name)}](${data.file.webViewLink})`;
+        const insertionPosition = editor.state.selection.from;
         editor
           .chain()
           .focus()
-          .insertContentAt(editor.state.selection.from, markdown)
+          .insertContentAt(insertionPosition, markdown)
           .run();
+        const aiType = getAiAttachmentType(file);
+        if (aiType) {
+          const pending: PendingAiAttachment = {
+            id: globalThis.crypto.randomUUID(),
+            noteId: note.id,
+            file,
+            position: editor.state.selection.from,
+            processing: false,
+            error: null,
+          };
+          const next = [...pendingAiAttachmentsRef.current, pending];
+          pendingAiAttachmentsRef.current = next;
+          setPendingAiAttachments(next);
+        }
       }
     } catch (error: unknown) {
       setUploadError(
@@ -827,7 +882,80 @@ TaskItem.configure({
       uploadingFilesRef.current = false;
       setUploadingAttachments(false);
     }
-  }, [editor]);
+  }, [editor, note.id]);
+
+  async function processAiAttachment(id: string) {
+    const pending = pendingAiAttachmentsRef.current.find(
+      (attachment) => attachment.id === id
+    );
+    if (!pending || pending.processing) return;
+    const type = getAiAttachmentType(pending.file);
+    if (!type) return;
+
+    const processingState = pendingAiAttachmentsRef.current.map((attachment) =>
+      attachment.id === id
+        ? { ...attachment, processing: true, error: null }
+        : attachment
+    );
+    pendingAiAttachmentsRef.current = processingState;
+    setPendingAiAttachments(processingState);
+
+    try {
+      const form = new FormData();
+      form.append("type", type);
+      form.append("file", pending.file);
+      const response = await fetch("/api/ai/process-attachment", {
+        method: "POST",
+        body: form,
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        html?: string;
+      };
+      if (!response.ok || !result.html) {
+        throw new Error(result.error ?? "No se pudo procesar el adjunto.");
+      }
+
+      const current = pendingAiAttachmentsRef.current.find(
+        (attachment) => attachment.id === id
+      );
+      const currentEditor = editorRef.current;
+      if (
+        !current ||
+        current.noteId !== latestNoteId.current ||
+        !currentEditor ||
+        currentEditor.isDestroyed
+      ) {
+        throw new Error("La nota cambió antes de insertar el resultado.");
+      }
+      const position = Math.min(
+        Math.max(1, current.position),
+        currentEditor.state.doc.content.size
+      );
+      currentEditor
+        .chain()
+        .focus()
+        .insertContentAt(position, result.html)
+        .run();
+      const next = pendingAiAttachmentsRef.current.filter(
+        (attachment) => attachment.id !== id
+      );
+      pendingAiAttachmentsRef.current = next;
+      setPendingAiAttachments(next);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "No se pudo procesar el adjunto.";
+      const next = pendingAiAttachmentsRef.current.map((attachment) =>
+        attachment.id === id
+          ? { ...attachment, processing: false, error: message }
+          : attachment
+      );
+      pendingAiAttachmentsRef.current = next;
+      setPendingAiAttachments(next);
+    }
+  }
 
   useEffect(() => {
     uploadFilesHandlerRef.current = (files) => {
@@ -844,6 +972,10 @@ TaskItem.configure({
   }, [editor]);
 
   useEffect(() => {
+    if (latestNoteId.current !== note.id) {
+      pendingAiAttachmentsRef.current = [];
+      setPendingAiAttachments([]);
+    }
     latestNoteId.current = note.id;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
 
@@ -1351,6 +1483,46 @@ TaskItem.configure({
             </div>
           ) : null}
         </div>
+
+        {pendingAiAttachments.some(
+          (attachment) => attachment.noteId === note.id
+        ) ? (
+          <div className="mt-4 space-y-2">
+            {pendingAiAttachments
+              .filter((attachment) => attachment.noteId === note.id)
+              .map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2"
+                >
+                  <span className="flex min-w-0 items-center gap-2 truncate text-xs text-zinc-400">
+                    <FileText className="size-3.5 shrink-0" />
+                    {attachment.file.name}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={attachment.processing}
+                    onClick={() => void processAiAttachment(attachment.id)}
+                    className="flex items-center gap-1.5 rounded-md border border-emerald-900/70 px-2.5 py-1.5 text-[11px] text-emerald-300 transition hover:bg-emerald-950/50 disabled:opacity-50"
+                  >
+                    {attachment.processing ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-3" />
+                    )}
+                    {attachment.processing
+                      ? "Procesando…"
+                      : "Transcribir / Resumir con IA"}
+                  </button>
+                  {attachment.error ? (
+                    <p role="alert" className="w-full text-xs text-red-300">
+                      {attachment.error}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+          </div>
+        ) : null}
 
         <section className="mt-10 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/40">
           <button

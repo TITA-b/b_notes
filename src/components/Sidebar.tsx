@@ -4,13 +4,17 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
+  Bell,
+  BellOff,
   CalendarDays,
   CalendarRange,
   Download,
   Globe2,
+  Loader2,
   LogOut,
   LayoutTemplate,
   Menu,
+  Send,
   Settings2,
   X,
 } from "lucide-react";
@@ -20,6 +24,239 @@ import { getAreaIcon } from "@/lib/areaIcons";
 import { clearOfflineCache, getAllNotes } from "@/services/notesService";
 import { AreaManagerModal } from "@/components/AreaManagerModal";
 import { GENERAL_AREA_ID, type Area, type AreaId } from "@/types/note";
+
+type PushState = "checking" | "active" | "inactive" | "unsupported";
+
+function PushNotificationsControl() {
+  const [pushState, setPushState] = useState<PushState>("checking");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [publicKey, setPublicKey] = useState("");
+
+  useEffect(() => {
+    void Promise.resolve().then(async () => {
+      if (
+        !("serviceWorker" in navigator) ||
+        !("PushManager" in window) ||
+        !("Notification" in window)
+      ) {
+        setPushState("unsupported");
+        return;
+      }
+
+      try {
+        const [registration, response] = await Promise.all([
+          navigator.serviceWorker.getRegistration("/"),
+          fetch("/api/push/config"),
+        ]);
+        const subscription = await registration?.pushManager.getSubscription();
+        const config = (await response.json()) as {
+          error?: string;
+          publicKey?: string;
+        };
+        if (!response.ok) {
+          throw new Error(config.error ?? "No se pudo consultar la configuración Push.");
+        }
+        setPublicKey(config.publicKey ?? "");
+        if (!config.publicKey) {
+          setError("Falta configurar la clave pública VAPID.");
+        }
+        setPushState(subscription ? "active" : "inactive");
+      } catch (configurationError) {
+        setError(
+          configurationError instanceof Error
+            ? configurationError.message
+            : "No se pudo consultar la configuración Push."
+        );
+        setPushState("inactive");
+      }
+    });
+  }, []);
+
+  async function activate() {
+    if (!publicKey) {
+      setError("Falta configurar la clave pública VAPID.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    let subscription: PushSubscription | null = null;
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        throw new Error("El navegador no concedió permiso para notificaciones.");
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      const base64Key = publicKey.replace(/-/g, "+").replace(/_/g, "/");
+      const encodedKey = base64Key.padEnd(
+        Math.ceil(base64Key.length / 4) * 4,
+        "="
+      );
+      const rawKey = atob(encodedKey);
+      const applicationServerKey = new Uint8Array(rawKey.length);
+      for (let index = 0; index < rawKey.length; index += 1) {
+        applicationServerKey[index] = rawKey.charCodeAt(index);
+      }
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+      const response = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subscription.toJSON()),
+      });
+      const result = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error ?? "No se pudo activar Push.");
+      }
+      setPushState("active");
+    } catch (activationError) {
+      if (subscription) {
+        try {
+          await subscription.unsubscribe();
+        } catch (unsubscribeError) {
+          console.error("Could not clean up an unregistered Push subscription.", unsubscribeError);
+        }
+      }
+      setError(
+        activationError instanceof Error
+          ? activationError.message
+          : "No se pudieron activar las notificaciones."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deactivate() {
+    setBusy(true);
+    setError(null);
+    try {
+      const registration = await navigator.serviceWorker.getRegistration("/");
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) {
+        const response = await fetch("/api/push/subscribe", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(subscription.toJSON()),
+        });
+        const result = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(result.error ?? "No se pudo eliminar la suscripción.");
+        }
+        await subscription.unsubscribe();
+      }
+      setPushState("inactive");
+    } catch (deactivationError) {
+      setError(
+        deactivationError instanceof Error
+          ? deactivationError.message
+          : "No se pudieron desactivar las notificaciones."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendTest() {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "B_Notes",
+          body: "Las notificaciones están funcionando.",
+          url: "/",
+        }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        sent?: number;
+      };
+      if (!response.ok) {
+        throw new Error(result.error ?? "No se pudo enviar la prueba.");
+      }
+      if (!result.sent) {
+        throw new Error("No hay suscripciones Push activas para esta cuenta.");
+      }
+    } catch (sendError) {
+      setError(
+        sendError instanceof Error
+          ? sendError.message
+          : "No se pudo enviar la notificación de prueba."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const isActive = pushState === "active";
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-2.5">
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="flex items-center gap-2 text-xs font-medium text-zinc-300">
+          {isActive ? (
+            <Bell className="size-3.5 text-emerald-400" />
+          ) : (
+            <BellOff className="size-3.5 text-zinc-500" />
+          )}
+          Notificaciones Push
+        </span>
+        <span
+          className={`text-[10px] ${
+            isActive ? "text-emerald-400" : "text-zinc-500"
+          }`}
+        >
+          {pushState === "checking"
+            ? "Comprobando"
+            : pushState === "unsupported"
+              ? "No disponible"
+              : isActive
+                ? "Activas"
+                : "Desactivadas"}
+        </span>
+      </div>
+      {pushState !== "unsupported" ? (
+        <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <button
+            type="button"
+            disabled={busy || pushState === "checking"}
+            onClick={() => void (isActive ? deactivate() : activate())}
+            className="flex h-8 items-center justify-center gap-1 rounded-md border border-zinc-800 px-2 text-[10px] text-zinc-300 transition hover:bg-zinc-900 disabled:opacity-50"
+          >
+            {busy ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : isActive ? (
+              <BellOff className="size-3" />
+            ) : (
+              <Bell className="size-3" />
+            )}
+            {isActive ? "Desactivar" : "Activar"}
+          </button>
+          <button
+            type="button"
+            disabled={busy || !isActive}
+            onClick={() => void sendTest()}
+            className="flex h-8 items-center justify-center gap-1 rounded-md border border-zinc-800 px-2 text-[10px] text-zinc-300 transition hover:bg-zinc-900 disabled:opacity-50"
+          >
+            <Send className="size-3" />
+            Probar
+          </button>
+        </div>
+      ) : null}
+      {error ? (
+        <p role="alert" className="mt-2 px-1 text-[10px] leading-4 text-red-300">
+          {error}
+        </p>
+      ) : null}
+    </section>
+  );
+}
 
 interface SidebarProps {
   areas: Area[];
@@ -190,6 +427,7 @@ export function Sidebar({
       </nav>
 
       <div className="space-y-2 border-t border-zinc-800 p-3">
+        <PushNotificationsControl />
         <button
           type="button"
           onClick={() => {
