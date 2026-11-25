@@ -57,13 +57,13 @@ Las imágenes muestran B_Notes en tema oscuro y usan exclusivamente contenido si
 
 <table width="100%">
   <tr>
-    <td width="65%" valign="middle">
+    <td align="center" valign="top" width="75%">
       <strong>Grafo de conocimiento · Escritorio</strong><br>
-      <img src="docs/screenshots/grafo.png" alt="Grafo de conocimiento con notas y conexiones" width="65%" />
+      <img src="docs/screenshots/grafo.png" alt="Grafo de conocimiento · Escritorio" width="100%" />
     </td>
-    <td width="35%" align="center" valign="middle">
+    <td align="center" valign="top" width="25%">
       <strong>Captura rápida · PWA móvil</strong><br>
-      <img src="docs/screenshots/mobile-pwa.png" width="210" alt="Captura rápida · PWA móvil" />
+      <img src="docs/screenshots/mobile-pwa.png" alt="Captura rápida · PWA móvil" width="190" />
     </td>
   </tr>
 </table>
