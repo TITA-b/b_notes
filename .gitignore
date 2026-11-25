@@ -30,7 +30,9 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # local environment and credentials
-.env*
+.env
+.env.local
+.env.*
 !.env.example
 *.pem
 *.key
@@ -43,14 +45,23 @@ token.json
 # local backups
 /backups/
 *.sql
-*.sql.zip
+*.sql.gz
+*.dump
 *.tar.gz
+*.zip
+*.tmp
+*.temp
+*.bak
+*.backup
+*.log
+*.swp
+*~
 
 # vercel
 .vercel
 
 # typescript
 *.tsbuildinfo
+# generated types and context dumps
 next-env.d.ts
-
-repomix-output.xml
+repomix-output.*
