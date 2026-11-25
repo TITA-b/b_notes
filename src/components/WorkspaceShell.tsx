@@ -85,6 +85,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [closeLightboxSignal, setCloseLightboxSignal] = useState(0);
+  const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
   const [isOffline, setIsOffline] = useState(false);
   const [syncStatus, setSyncStatus] = useState<OfflineSyncStatus>("idle");
   const [shareCaptureError, setShareCaptureError] = useState<string | null>(null);
@@ -663,6 +664,17 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
     [activeArea, areas, handleSelectNote]
   );
 
+  const handleOpenAssistantNote = useCallback(
+    async (noteId: string) => {
+      const note = (await getAllNotes()).find((item) => item.id === noteId);
+      if (!note) throw new Error("La nota citada ya no existe.");
+      handleSelectNote(note);
+      closeHistoryLayer("ai");
+      setAiOpen(false);
+    },
+    [closeHistoryLayer, handleSelectNote]
+  );
+
   useEffect(() => {
     function handlePeriodicNoteShortcut(event: KeyboardEvent) {
       if (
@@ -907,6 +919,7 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
               notes={notes}
               onSelectNote={handleSelectNote}
               refreshKey={tasksRefreshKey}
+              calendarRefreshKey={calendarRefreshKey}
               closeLightboxSignal={closeLightboxSignal}
               onLightboxChange={(open) => {
                 if (open && !lightboxOpen) pushHistoryLayer("lightbox");
@@ -1148,7 +1161,13 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
         activeAreaName={activeAreaName}
         activeNoteId={selectedNoteId}
         activeNoteTitle={selectedNote?.title}
-        onActionsExecuted={({ createdNotes, createdTasks, updatedNote }) => {
+        onOpenNote={handleOpenAssistantNote}
+        onActionsExecuted={({
+          createdNotes,
+          createdTasks,
+          updatedNote,
+          calendarChanged,
+        }) => {
           if (createdNotes.length > 0) {
             const notesInArea =
               activeArea === GENERAL_AREA_ID
@@ -1161,6 +1180,9 @@ export function WorkspaceShell({ userEmail }: WorkspaceShellProps) {
           }
           if (createdTasks.length > 0) {
             setTasksRefreshKey((k) => k + 1);
+          }
+          if (calendarChanged) {
+            setCalendarRefreshKey((key) => key + 1);
           }
           if (updatedNote) {
             updateNotes((prev) =>

@@ -15,18 +15,75 @@ interface AiAction {
     | "create_task"
     | "create_note"
     | "append_to_active_note"
-    | "create_calendar_event";
+    | "create_calendar_event"
+    | "append_to_note"
+    | "create_gcal_event";
   area?: string;
   title?: string;
   content?: string;
   due_date?: string | null;
+  dueDate?: string | null;
+  noteId?: string;
   start_time?: string;
   end_time?: string;
+  start?: string;
+  end?: string;
 }
 
 interface AvailableArea {
   slug: string;
   name: string;
+}
+
+interface RankedNoteRow {
+  id: string;
+  title: string;
+  areaId: string;
+  updatedAt: string;
+  content: string;
+  rank: number;
+}
+
+interface RankedTaskRow {
+  id: string;
+  title: string;
+  areaId: string;
+  dueDate: string | null;
+  rank: number;
+}
+
+const SPANISH_STOP_WORDS = new Set([
+  "acá", "ahi", "ahí", "algo", "algunas", "algunos", "como", "con", "cual",
+  "cuando", "de", "del", "desde", "donde", "dos", "el", "ella", "ellas",
+  "ellos", "en", "entre", "era", "es", "esa", "esas", "ese", "eso", "esos",
+  "esta", "está", "estas", "este", "esto", "estos", "fue", "ha", "hay", "la",
+  "las", "le", "les", "lo", "los", "mas", "más", "me", "mi", "mis", "muy",
+  "no", "nos", "o", "para", "pero", "por", "que", "qué", "se", "sin", "sobre",
+  "su", "sus", "te", "tiene", "todo", "un", "una", "uno", "unos", "unas", "y",
+  "ya",
+]);
+
+function extractKeywords(message: string): string[] {
+  const words = message.toLocaleLowerCase("es").match(/[\p{L}\p{N}]{3,}/gu) ?? [];
+  return Array.from(
+    new Set(words.filter((word) => !SPANISH_STOP_WORDS.has(word)))
+  ).slice(0, 10);
+}
+
+function stripHtml(content: string): string {
+  return content
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(p|li|h[1-6]|div|blockquote)>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function addOneHour(dateTime: string): string {
@@ -96,6 +153,11 @@ export async function POST(request: Request) {
       typeof body.audioBase64 === "string" ? body.audioBase64 : null;
     const audioMimeType =
       typeof body.audioMimeType === "string" ? body.audioMimeType : null;
+    const lastUserMessage =
+      messages.length > 0 ? messages[messages.length - 1].content : "";
+    const keywords = extractKeywords(lastUserMessage);
+    const keywordPatterns = keywords.map((keyword) => `%${keyword}%`);
+    const searchText = keywords.join(" ");
 
     const { rows: notes } = await query<
       Pick<Note, "id" | "title" | "content" | "updated_at">
@@ -113,6 +175,86 @@ export async function POST(request: Request) {
        ORDER BY due_date ASC NULLS LAST LIMIT 20`,
       [user.id]
     );
+
+    let relevantNotes: Array<{
+      id: string;
+      title: string;
+      areaId: string;
+      updatedAt: string;
+      excerpt: string;
+    }> = [];
+    let relevantTasks: Array<{
+      id: string;
+      title: string;
+      areaId: string;
+      dueDate: string | null;
+    }> = [];
+    if (keywords.length > 0) {
+      const { rows: rankedNotes } = await query<RankedNoteRow>(
+        `WITH search AS (
+           SELECT plainto_tsquery('spanish', $2) AS terms
+         )
+         SELECT n.id, n.title, n.area AS "areaId",
+                n.updated_at::text AS "updatedAt",
+                left(coalesce(n.content, ''), 12000) AS content,
+                ts_rank(
+                  to_tsvector(
+                    'spanish',
+                    coalesce(n.title, '') || ' ' || coalesce(n.content, '')
+                  ),
+                  search.terms
+                ) AS rank
+         FROM notes n
+         CROSS JOIN search
+         WHERE n.user_id = $1
+           AND (
+             to_tsvector(
+               'spanish',
+               coalesce(n.title, '') || ' ' || coalesce(n.content, '')
+             ) @@ search.terms
+             OR n.title ILIKE ANY($3::text[])
+             OR n.content ILIKE ANY($3::text[])
+           )
+         ORDER BY rank DESC, n.updated_at DESC
+         LIMIT 8`,
+        [user.id, searchText, keywordPatterns]
+      );
+      relevantNotes = rankedNotes.map((note) => ({
+        id: note.id,
+        title: note.title,
+        areaId: note.areaId,
+        updatedAt: note.updatedAt,
+        excerpt: stripHtml(note.content).slice(0, 600),
+      }));
+
+      const { rows: rankedTasks } = await query<RankedTaskRow>(
+        `WITH search AS (
+           SELECT plainto_tsquery('spanish', $2) AS terms
+         )
+         SELECT t.id, t.title, t.area AS "areaId", t.due_date AS "dueDate",
+                ts_rank(
+                  to_tsvector('spanish', coalesce(t.title, '')),
+                  search.terms
+                ) AS rank
+         FROM tasks t
+         CROSS JOIN search
+         WHERE t.user_id = $1
+           AND t.completed = false
+           AND (
+             to_tsvector('spanish', coalesce(t.title, '')) @@ search.terms
+             OR t.title ILIKE ANY($3::text[])
+           )
+         ORDER BY rank DESC, t.due_date ASC NULLS LAST
+         LIMIT 8`,
+        [user.id, searchText, keywordPatterns]
+      );
+      relevantTasks = rankedTasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        areaId: task.areaId,
+        dueDate: task.dueDate,
+      }));
+    }
 
     let calendarSummary = "Google Calendar no conectado.";
     try {
@@ -165,9 +307,6 @@ export async function POST(request: Request) {
             })
             .join("\n")
         : "No hay tareas pendientes.";
-    const lastUserMessage =
-      messages.length > 0 ? messages[messages.length - 1].content : "";
-
     const n8nResponse = await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -181,6 +320,8 @@ export async function POST(request: Request) {
         activeNoteId,
         message: lastUserMessage,
         history: messages,
+        audioBase64,
+        audioMimeType,
         audio: audioBase64
           ? {
               base64: audioBase64,
@@ -196,6 +337,8 @@ export async function POST(request: Request) {
             slug,
             name,
           })),
+          relevantNotes,
+          relevantTasks,
         },
       }),
     });
@@ -232,6 +375,7 @@ export async function POST(request: Request) {
     const createdNotes: Note[] = [];
     const createdTasks: Task[] = [];
     let updatedNote: Note | null = null;
+    let calendarChanged = false;
 
     for (const action of actions) {
       const requestedArea = action.area?.trim().toLowerCase();
@@ -250,7 +394,7 @@ export async function POST(request: Request) {
             user.id,
             targetArea,
             action.title.trim(),
-            action.due_date || null,
+            action.due_date ?? action.dueDate ?? null,
           ]
         );
         createdTasks.push(rows[0]);
@@ -271,13 +415,18 @@ export async function POST(request: Request) {
         createdNotes.push(rows[0]);
         executedActions.push(`Nota creada: "${action.title}" (${targetArea})`);
       } else if (
-        action.type === "append_to_active_note" &&
-        activeNoteId &&
+        (action.type === "append_to_active_note" ||
+          action.type === "append_to_note") &&
         action.content
       ) {
+        const noteId =
+          action.type === "append_to_note" && action.noteId
+            ? action.noteId
+            : activeNoteId;
+        if (!noteId) continue;
         const { rows: currentRows } = await query<{ content: string }>(
           "SELECT content FROM notes WHERE user_id = $1 AND id = $2",
-          [user.id, activeNoteId]
+          [user.id, noteId]
         );
         const currentNote = currentRows[0];
         if (currentNote) {
@@ -286,7 +435,7 @@ export async function POST(request: Request) {
           const { rows } = await query<Note>(
             `UPDATE notes SET content = $1, links = $2, updated_at = now()
              WHERE user_id = $3 AND id = $4 RETURNING *`,
-            [content, JSON.stringify(extractWikilinks(content)), user.id, activeNoteId]
+            [content, JSON.stringify(extractWikilinks(content)), user.id, noteId]
           );
           if (rows[0]) {
             updatedNote = rows[0];
@@ -294,9 +443,10 @@ export async function POST(request: Request) {
           }
         }
       } else if (
-        action.type === "create_calendar_event" &&
+        (action.type === "create_calendar_event" ||
+          action.type === "create_gcal_event") &&
         action.title &&
-        action.start_time
+        (action.start_time || action.start)
       ) {
         const calendar = await getAuthenticatedCalendar();
         if (!calendar) {
@@ -306,13 +456,15 @@ export async function POST(request: Request) {
           continue;
         }
 
-        const endTime = action.end_time ?? addOneHour(action.start_time);
+        const startTime = action.start_time ?? action.start;
+        if (!startTime) continue;
+        const endTime = action.end_time ?? action.end ?? addOneHour(startTime);
         const createdEvent = await calendar.events.insert({
           calendarId: "primary",
           requestBody: {
             summary: action.title.trim(),
             start: {
-              dateTime: action.start_time,
+              dateTime: startTime,
               timeZone: "America/Argentina/Buenos_Aires",
             },
             end: {
@@ -324,6 +476,7 @@ export async function POST(request: Request) {
         executedActions.push(
           `Evento creado: "${action.title}" (${createdEvent.data.id ?? "Google Calendar"})`
         );
+        calendarChanged = true;
       }
     }
 
@@ -334,6 +487,8 @@ export async function POST(request: Request) {
       createdNotes,
       createdTasks,
       updatedNote,
+      relevantNotes,
+      calendarChanged,
     });
   } catch (error) {
     const message =

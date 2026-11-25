@@ -98,6 +98,13 @@ export async function ensureDatabaseSchema(): Promise<void> {
           ON areas(user_id, position);
         CREATE INDEX IF NOT EXISTS notes_user_area_updated_idx
           ON notes(user_id, area, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_notes_fts
+          ON notes USING GIN (
+            to_tsvector(
+              'spanish',
+              coalesce(title, '') || ' ' || coalesce(content, '')
+            )
+          );
         CREATE UNIQUE INDEX IF NOT EXISTS notes_user_periodic_key_unique_idx
           ON notes(user_id, periodic_key)
           WHERE periodic_key IS NOT NULL;

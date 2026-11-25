@@ -58,6 +58,7 @@ interface TaskBoardProps {
   notes: Note[];
   onSelectNote: (note: Note) => void;
   refreshKey: number;
+  calendarRefreshKey: number;
   closeLightboxSignal: number;
   onLightboxChange: (open: boolean) => void;
 }
@@ -281,6 +282,7 @@ export function TaskBoard({
   notes,
   onSelectNote,
   refreshKey,
+  calendarRefreshKey,
   closeLightboxSignal,
   onLightboxChange,
 }: TaskBoardProps) {
@@ -378,6 +380,13 @@ export function TaskBoard({
       setGcalLoading(false);
     }
   }, []);
+
+  const previousCalendarRefreshKey = useRef(calendarRefreshKey);
+  useEffect(() => {
+    if (previousCalendarRefreshKey.current === calendarRefreshKey) return;
+    previousCalendarRefreshKey.current = calendarRefreshKey;
+    void loadCalendar(false);
+  }, [calendarRefreshKey, loadCalendar]);
 
   useEffect(() => {
     let cancelled = false;
